@@ -293,7 +293,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         L1_dummy = map(L1_layer, layers)
         L1_dummy = sum(L1_dummy)
 
-        loss = alpha*criterion(output, target) + (1-alpha)*AP_loss*0.5      # 0.5 for gradient scaling
+        loss = alpha*criterion(output, target) + (1-alpha)*AP_loss
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -438,11 +438,11 @@ def layers_list(layer):
 
 def angle_penalty_loss(layer):
     # Angle of the whole layer
-    W_r = layer.weight.clone()
+    W_r = layer.weight
     # angle = torch.acos(W_r.abs().sum() / (torch.sqrt(W_r.pow(2).sum()) * math.sqrt(W_r.nelement())))
 
     # Alternative
-    W_q = layer.weight.sign()
+    W_q = layer.weight.sign().detach()
 
     W_r = W_r.view(-1)
     W_q = W_q.view(-1)
