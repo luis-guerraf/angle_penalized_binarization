@@ -446,7 +446,7 @@ def angle_penalty_loss(layer):
 
     W_r = W_r.view(-1)
     W_q = W_q.view(-1)
-    angle = torch.acos(torch.dot(W_r, W_q) / (torch.norm(W_r, p=2)*torch.norm(W_q, p=2)))
+    angle = torch.acos(torch.dot(W_r, W_q) / (torch.norm(W_r, p=2)*torch.norm(W_q, p=2)) - 1e-5)
     # angle = -torch.log(torch.dot(W_r, W_q) / (torch.norm(W_r, p=2)*torch.norm(W_q, p=2)))
 
     # angles = torch.zeros(W_r.shape[0], W_r.shape[1]).cuda()
