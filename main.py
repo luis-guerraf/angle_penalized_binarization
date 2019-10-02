@@ -78,7 +78,7 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'multi node data parallel training')
 
 best_acc1 = 0
-alpha = 0.5
+alpha = 1
 
 def main():
     args = parser.parse_args()
@@ -194,9 +194,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Data loading code
     if args.dataset == 'imagenet':
-        datafolder = '../Datasets/IMAGENET/ImageNet_smallSize256/'
+        datafolder = '../../Datasets/IMAGENET/ImageNet_smallSize256/'
     elif args.dataset == 'tiny_imagenet':
-        datafolder = '../Datasets/IMAGENET/tiny-imagenet-200/'
+        datafolder = '../../Datasets/IMAGENET/tiny-imagenet-200/'
 
     traindir = os.path.join(datafolder, 'train')
     valdir = os.path.join(datafolder, 'val')
