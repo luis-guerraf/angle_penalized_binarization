@@ -153,6 +153,11 @@ def main_worker(gpu, ngpus_per_node, args):
         print("=> creating model '{}'".format(args.arch))
         model = models.__dict__[args.arch](num_classes=num_classes)
 
+    # Init learnable scalings
+    dummy_layer_list = layers_list(model)
+    for dummy in dummy_layer_list:
+        dummy.init_scalings()
+
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
         # should always set the single device scope, otherwise,
@@ -194,9 +199,9 @@ def main_worker(gpu, ngpus_per_node, args):
                                     momentum=args.momentum, weight_decay=args.weight_decay)
     else:
         # Adam (lr=1e-3, wd=1e-6) is better for quantized networks  (except with APSQ)
-        # optimizer = torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.weight_decay)
-        optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                    momentum=args.momentum, weight_decay=args.weight_decay)
+        optimizer = torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.weight_decay)
+        # optimizer = torch.optim.SGD(model.parameters(), args.lr,
+        #                             momentum=args.momentum, weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -430,7 +435,7 @@ class AverageMeter(object):
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 25))
+    lr = args.lr * (0.1 ** (epoch // 10))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 

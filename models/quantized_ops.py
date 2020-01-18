@@ -110,18 +110,18 @@ class QuantizedConv2d(nn.Conv2d):
         super(QuantizedConv2d, self).__init__(in_channels, out_channels, kernel_size,
                                         stride=self.stride, padding=self.padding,
                                         dilation=dilation, groups=groups, bias=bias)
-        # self.scale = Parameter(torch.Tensor(out_channels, in_channels).uniform_(1, 1))
+        self.scale = Parameter(torch.Tensor(out_channels, in_channels).uniform_(1, 1))
 
     def forward(self, input):
         if bitW == 32:
             weight = self.weight
         elif bitW == 1:
             # For learnable scalings
-            # weight = Binarize_W.apply(self.weight)
-            # weight *= self.scale.unsqueeze(-1).unsqueeze(-1)
+            weight = Binarize_W.apply(self.weight)
+            weight *= self.scale.unsqueeze(-1).unsqueeze(-1)
 
             # For APSQ
-            weight = Xnorize_W_Kernelwise.apply(self.weight)
+            # weight = Xnorize_W_Kernelwise.apply(self.weight)
         else:
             weight = DoReFa_W(self.weight, bitW)
 
@@ -144,18 +144,18 @@ class QuantizedConv1d(nn.Conv2d):
         super(QuantizedConv1d, self).__init__(in_channels, out_channels, kernel_size,
                                         stride=self.stride, padding=self.padding,
                                         dilation=dilation, groups=groups, bias=bias)
-        # self.scale = Parameter(torch.Tensor(out_channels).uniform_(0, 1))
+        self.scale = Parameter(torch.Tensor(out_channels).uniform_(0, 1))
 
     def forward(self, input):
         if bitW == 32:
             weight = self.weight
         elif bitW == 1:
             # For learnable kernels
-            # weight = Binarize_W.apply(self.weight)
-            # weight *= self.scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            weight = Binarize_W.apply(self.weight)
+            weight *= self.scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
 
             # For APSQ
-            weight = Xnorize_W_Channelwise.apply(self.weight)
+            # weight = Xnorize_W_Channelwise.apply(self.weight)
         else:
             weight = DoReFa_W(self.weight, bitW)
 
