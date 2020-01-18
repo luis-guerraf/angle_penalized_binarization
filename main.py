@@ -4,7 +4,6 @@ import random
 import shutil
 import time
 import warnings
-import sys
 
 import torch
 import torch.nn as nn
@@ -33,7 +32,7 @@ parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=8, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
@@ -51,8 +50,6 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
 parser.add_argument('--wd', '--weight-decay', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)',
                     dest='weight_decay')
-parser.add_argument('-p', '--print-freq', default=10, type=int,
-                    metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
 parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
@@ -76,12 +73,22 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'N processes per node, which has N GPUs. This is the '
                          'fastest way to use PyTorch for either single node or '
                          'multi node data parallel training')
+parser.add_argument('--alpha', default=None, type=float,
+                    help='Alpha hyperparameter for regularization')
+parser.add_argument('--bitw', default=1, type=int,
+                    help='bitwidth of weights')
+parser.add_argument('--non-lazy', dest='non_lazy', action='store_true',
+                    help='Lazy (STE) or non-lazy projection')
+parser.add_argument('--freeze-W', dest='freeze_W', action='store_true',
+                    help='Freeze weights to fine-tune batch-norm parameters')
 
 best_acc1 = 0
-alpha = 1
+alpha = None
 
 def main():
+    global alpha
     args = parser.parse_args()
+    alpha = args.alpha
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -131,7 +138,13 @@ def main_worker(gpu, ngpus_per_node, args):
             args.rank = args.rank * ngpus_per_node + gpu
         dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                                 world_size=args.world_size, rank=args.rank)
+
     # create model
+    if args.non_lazy:
+        models.quantized_ops.bitW = 32
+    else:
+        models.quantized_ops.bitW = args.bitw
+
     num_classes = 1000 if args.dataset == 'imagenet' else 200
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
@@ -169,24 +182,33 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             model = torch.nn.DataParallel(model).cuda()
 
+    if args.freeze_W:
+        map(freeze_weights, layers_list(model.module))
+
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    if args.non_lazy:
+        # SGD (lr=0.1, wd=1e-4) is better for real networks
+        optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                    momentum=args.momentum, weight_decay=args.weight_decay)
+    else:
+        # Adam (lr=1e-3, wd=1e-6) is better for quantized networks  (except with APSQ)
+        # optimizer = torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.weight_decay)
+        optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                    momentum=args.momentum, weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
             print("=> loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume)
-            args.start_epoch = checkpoint['epoch']
-            best_acc1 = checkpoint['best_acc1']
+            # args.start_epoch = checkpoint['epoch']
+            # best_acc1 = checkpoint['best_acc1']
             model.load_state_dict(checkpoint['state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer'])
-            print("=> loaded checkpoint '{}' (epoch {})"
-                  .format(args.resume, checkpoint['epoch']))
+            print("=> loaded checkpoint '{}' (epoch: {} acc1: {:0.2f})"
+                  .format(args.resume, checkpoint['epoch'], checkpoint['best_acc1']))
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
@@ -242,6 +264,7 @@ def main_worker(gpu, ngpus_per_node, args):
         if args.distributed:
             train_sampler.set_epoch(epoch)
         adjust_learning_rate(optimizer, epoch, args)
+        adjust_alpha(epoch, args)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
@@ -252,6 +275,8 @@ def main_worker(gpu, ngpus_per_node, args):
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
         best_acc1 = max(acc1, best_acc1)
+        if is_best:
+            print('Best accuracy: {:0.3f}'.format(best_acc1.item()))
 
         if not args.multiprocessing_distributed or (args.multiprocessing_distributed
                 and args.rank % ngpus_per_node == 0):
@@ -267,15 +292,18 @@ def main_worker(gpu, ngpus_per_node, args):
 def train(train_loader, model, criterion, optimizer, epoch, args):
     batch_time = AverageMeter()
     data_time = AverageMeter()
-    losses = AverageMeter()
+    CE_losses = AverageMeter()
     AP_losses = AverageMeter()
-    L1 = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
     layers = layers_list(model.module)
 
     # switch to train mode
     model.train()
+
+    # Train using final weights
+    if args.freeze_W:
+        models.quantized_ops.bitW = args.bitW
 
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
@@ -291,18 +319,15 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
         # Angle Regularization
         AP_loss = map(angle_penalty_loss, layers)
-        AP_loss = sum(AP_loss)
+        AP_loss = sum(AP_loss)/len(AP_loss)
 
-        L1_dummy = map(L1_layer, layers)
-        L1_dummy = sum(L1_dummy)
-
-        loss = alpha*criterion(output, target) + (1-alpha)*AP_loss
+        CE_loss = criterion(output, target)
+        loss = CE_loss + alpha*AP_loss
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
-        losses.update(loss.item(), input.size(0))
+        CE_losses.update(CE_loss.item(), input.size(0))
         AP_losses.update(AP_loss.data.item(), input.size(0))
-        L1.update(L1_dummy.data.item(), input.size(0))
         top1.update(acc1[0], input.size(0))
         top5.update(acc5[0], input.size(0))
 
@@ -315,20 +340,20 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-    print('Epoch: [{0}][{1}/{2}]\t'
+    print('Epoch: [{0}]\t'
           'Time {batch_time.avg:.3f}\t'
-          'Data {data_time.avg:.3f}\t'
           'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
-          'L1 {L1.avg:.4f}\t'
           'Acc@1 {top1.avg:.3f}\t'
-          'Acc@5 {top5.avg:.3f}'.format(
-           epoch, i, len(train_loader), batch_time=batch_time,
-           data_time=data_time, loss=losses, AP_loss=AP_losses, L1=L1, top1=top1, top5=top5))
+          'alpha {alpha:0.2f}\t'
+          'lr {lr:0.1e}'.format(
+           epoch, batch_time=batch_time,
+           loss=CE_losses, AP_loss=AP_losses, top1=top1, alpha=alpha,
+           lr=optimizer.param_groups[0]['lr']))
 
 
 def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter()
-    losses = AverageMeter()
+    CE_losses = AverageMeter()
     AP_losses = AverageMeter()
     top1 = AverageMeter()
     top5 = AverageMeter()
@@ -336,6 +361,9 @@ def validate(val_loader, model, criterion, args):
 
     # switch to evaluate mode
     model.eval()
+
+    # Validate using quantized weights
+    models.quantized_ops.bitW = args.bitw
 
     with torch.no_grad():
         end = time.time()
@@ -349,13 +377,14 @@ def validate(val_loader, model, criterion, args):
 
             # Angle Regularization
             AP_loss = map(angle_penalty_loss, layers)
-            AP_loss = sum(AP_loss)
+            AP_loss = sum(AP_loss)/len(AP_loss)
 
-            loss = alpha * criterion(output, target) + (1 - alpha) * AP_loss
+            CE_loss = criterion(output, target)
+            loss = CE_loss + alpha*AP_loss
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
-            losses.update(loss.item(), input.size(0))
+            CE_losses.update(CE_loss.item(), input.size(0))
             AP_losses.update(AP_loss.data.item(), input.size(0))
             top1.update(acc1[0], input.size(0))
             top5.update(acc5[0], input.size(0))
@@ -364,13 +393,12 @@ def validate(val_loader, model, criterion, args):
             batch_time.update(time.time() - end)
             end = time.time()
 
-        print('Test: [{0}/{1}]\t'
+        print('Test:\t\t'
               'Time {batch_time.avg:.3f}\t'
-              'Loss {loss.avg:.4f} {AP_loss.avg:.4f}\t'
+              'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
               'Acc@1 {top1.avg:.3f}\t'
-              'Acc@5 {top5.avg:.3f}'.format(
-               i, len(val_loader), batch_time=batch_time, loss=losses, AP_loss=AP_losses,
-               top1=top1, top5=top5))
+              'alpha {alpha:0.2f}'.format(
+               batch_time=batch_time, loss=CE_losses, AP_loss=AP_losses, top1=top1, alpha=alpha))
 
     return top1.avg
 
@@ -379,7 +407,7 @@ def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     filename = 'pretrained/' + filename
     torch.save(state, filename)
     if is_best:
-        shutil.copyfile(filename, 'model_best.pth.tar')
+        shutil.copyfile(filename, 'pretrained/model_best.pth.tar')
 
 
 class AverageMeter(object):
@@ -402,9 +430,16 @@ class AverageMeter(object):
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 30))
+    lr = args.lr * (0.1 ** (epoch // 25))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+
+
+def adjust_alpha(epoch, args):
+    global alpha
+    # alpha *= 1.3      # exponential
+    alpha = args.alpha ** (epoch // 5 + 1)      # multi-step
+    alpha = 10000 if alpha > 10000 else alpha
 
 
 def accuracy(output, target, topk=(1,)):
@@ -442,29 +477,80 @@ def layers_list(layer):
 def angle_penalty_loss(layer):
     # Angle of the whole layer
     W_r = layer.weight
-    # angle = torch.acos(W_r.abs().sum() / (torch.sqrt(W_r.pow(2).sum()) * math.sqrt(W_r.nelement())))
 
-    # Alternative
+    # L1 and L2 binarization
     W_q = layer.weight.sign().detach()
+    angle = torch.norm(W_r - W_q, p=1)/W_r.nelement()
 
-    W_r = W_r.view(-1)
-    W_q = W_q.view(-1)
-    angle = torch.acos(torch.dot(W_r, W_q) / (torch.norm(W_r, p=2)*torch.norm(W_q, p=2)) - 1e-5)
-    # angle = -torch.log(torch.dot(W_r, W_q) / (torch.norm(W_r, p=2)*torch.norm(W_q, p=2)))
+    #region ### Binary weights ###
+    # Layer-wise
+    # W_r = W_r.view(-1)
+    # sqrt_n = math.sqrt(len(W_r))
+    # angle = 1 - (torch.norm(W_r, p=1) / (torch.norm(W_r, p=2)*sqrt_n))
 
-    # angles = torch.zeros(W_r.shape[0], W_r.shape[1]).cuda()
-    # for out_channel in range(0, W_r.shape[0]):
-    #     for in_channel in range(0, W_r.shape[1]):
-    #         kernel_r = W_r[out_channel, in_channel, :, :].view(-1)
-    #         kernel_q = W_q[out_channel, in_channel, :, :].view(-1)
-    #         angles[out_channel, in_channel] = torch.acos(torch.dot(kernel_r, kernel_q) \
-    #                                             / (torch.norm(kernel_r, p=2)*torch.norm(kernel_q, p=2)) \
-    #                                                     ) * 180 / math.pi
+    # Channel-wise
+    # ones = torch.ones(W_r.shape[0]).cuda()
+    # norm_1 = torch.norm(W_r.view(W_r.shape[0], -1), p=1, dim=1)
+    # norm_2 = torch.norm(W_r.view(W_r.shape[0], -1), p=2, dim=1)
+    # sqrt_n = math.sqrt(W_r.view(W_r.shape[0], -1).shape[1])
+    # angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
+
+    # Kernel-wise
+    # if isinstance(layer, models.quantized_ops.QuantizedConv1d):
+    #     ones = torch.ones(W_r.shape[0]).cuda()
+    #     norm_1 = torch.norm(W_r.view(W_r.shape[0], -1), p=1, dim=1)
+    #     norm_2 = torch.norm(W_r.view(W_r.shape[0], -1), p=2, dim=1)
+    #     sqrt_n = math.sqrt(W_r.view(W_r.shape[0], -1).shape[1])
+    #     angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
+    # else:
+    #     ones = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+    #     norm_1 = torch.norm(W_r.view(W_r.shape[0], W_r.shape[1], -1), p=1, dim=2)
+    #     norm_2 = torch.norm(W_r.view(W_r.shape[0], W_r.shape[1], -1), p=2, dim=2)
+    #     sqrt_n = math.sqrt(W_r.view(W_r.shape[0], W_r.shape[1], -1).shape[2])
+    #     angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
+
+    #endregion
+
+    #region ### Quantized k-bit weights ###
+    # Layer-wise
+    # W_q = models.quantized_ops.DoReFa_W(layer.weight, models.quantized_ops.bitW).detach()
+    # W_r = W_r.view(-1)
+    # W_q = W_q.view(-1)
+    # dot_prod = torch.dot(W_r, W_q)
+    # norms = torch.norm(W_r, p=2) * torch.norm(W_q, p=2)
+    # angle = 1 - dot_prod / norms
+
+    # Channel-wise
+    # ones = torch.ones(W_r.shape[0]).cuda()
+    # dot_prod = torch.zeros(W_r.shape[0]).cuda()
+    # norms = torch.zeros(W_r.shape[0]).cuda()
+    # for out_channel in range(W_r.shape[0]):
+    #     channel_r = W_r[out_channel].view(-1)
+    #     channel_q = models.quantized_ops.DoReFa_W(channel_r, models.quantized_ops.bitW).detach()
+    #     dot_prod[out_channel] = torch.dot(channel_r, channel_q)
+    #     norms[out_channel] = torch.norm(channel_r, p=2) * torch.norm(channel_q, p=2)
+    # angle = torch.mean(ones - dot_prod / (norms))
+
+    # Kernel-wise
+    # ones = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+    # dot_prod = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+    # norms = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+    # for out_channel in range(W_r.shape[0]):
+    #     for in_channel in range(W_r.shape[1]):
+    #         kernel_r = W_r[out_channel, in_channel].view(-1)
+    #         kernel_q = models.quantized_ops.DoReFa_W(kernel_r, models.quantized_ops.bitW).detach()
+    #         dot_prod[out_channel, in_channel] = torch.dot(kernel_r, kernel_q)
+    #         norms[out_channel, in_channel] = torch.norm(kernel_r, p=2)*torch.norm(kernel_q, p=2)
+    # angle = torch.mean(ones - dot_prod / (norms))
+
+    #endregion
+
     return angle
 
 
-def L1_layer(layer):
-    return layer.weight.abs().sum()
+def freeze_weights(layer):
+    for param in layer.parameters():
+        param.requires_grad = False
 
 
 if __name__ == '__main__':
