@@ -18,16 +18,17 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 # import torchvision.models as models
 import models
-import math
+from models.segmentation._utils import ComposeJoint, RandomHorizontalFlipJoint, RandomResizedCropJoint, remap_ambiguous
+import numpy as np
 
-model_names = sorted(name for name in models.__dict__
+model_names = sorted(name for name in models.segmentation.__dict__
     if name.islower() and not name.startswith("__")
-    and callable(models.__dict__[name]))
+    and callable(models.segmentation.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('--dataset', default='tiny_imagenet', choices=['tiny_imagenet', 'imagenet'],
+parser.add_argument('--dataset', default='VOC', choices=['VOC'],
                     help='dataset')
-parser.add_argument('-a', '--arch', metavar='ARCH', default='resnet18',
+parser.add_argument('-a', '--arch', metavar='ARCH', default='fcn_resnet18',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
@@ -38,7 +39,7 @@ parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
+parser.add_argument('-b', '--batch-size', default=16, type=int,
                     metavar='N',
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
@@ -84,6 +85,7 @@ parser.add_argument('--freeze-W', dest='freeze_W', action='store_true',
 
 best_acc1 = 0
 alpha = None
+num_classes = 22        # 20 + background + ambiguous
 
 def main():
     global alpha
@@ -145,13 +147,8 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         models.quantized_ops.bitW = args.bitw
 
-    num_classes = 1000 if args.dataset == 'imagenet' else 200
-    if args.pretrained:
-        print("=> using pre-trained model '{}'".format(args.arch))
-        model = models.__dict__[args.arch](pretrained=True, num_classes=num_classes)
-    else:
-        print("=> creating model '{}'".format(args.arch))
-        model = models.__dict__[args.arch](num_classes=num_classes)
+    print("=> Creating model '{}'".format(args.arch))
+    model = models.segmentation.__dict__[args.arch](num_classes=num_classes)
 
     # Init learnable scalings
     # dummy_layer_list = layers_list(model)
@@ -191,7 +188,10 @@ def main_worker(gpu, ngpus_per_node, args):
         map(freeze_weights, layers_list(model.module))
 
     # define loss function (criterion) and optimizer
-    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
+    class_weights = torch.ones(num_classes)
+    class_weights[0] = 0.5        # Background
+    class_weights[21] = 0       # Ambiguous
+    criterion = nn.CrossEntropyLoss(class_weights).cuda(args.gpu)
 
     if args.non_lazy:
         # SGD (lr=0.1, wd=1e-4) is better for real networks
@@ -220,27 +220,31 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    if args.dataset == 'imagenet':
-        datafolder = '../../Datasets/IMAGENET/ImageNet_smallSize256/'
-    elif args.dataset == 'tiny_imagenet':
-        datafolder = '../../Datasets/IMAGENET/tiny-imagenet-200/'
+    if args.dataset == 'VOC':
+        # datafolder = '/data/benm/Pascal_VOC/'
+        datafolder = '/data/Datasets/'
 
-    traindir = os.path.join(datafolder, 'train')
-    valdir = os.path.join(datafolder, 'val')
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
+    train_transform = ComposeJoint(
+        [
+            RandomHorizontalFlipJoint(),
+            RandomResizedCropJoint(size=224, scale=(0.8, 1.0)),
+            [transforms.ToTensor(), lambda x:x],
+            [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)), lambda x:x],
+            [lambda x:x, transforms.Lambda(lambda x: torch.from_numpy(np.asarray(x)).long())],
+            [lambda x:x, remap_ambiguous()]
+        ])
+    valid_transform = ComposeJoint(
+        [
+            [transforms.ToTensor(), lambda x:x],
+            [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)), lambda x:x],
+            [lambda x:x, transforms.Lambda(lambda x: torch.from_numpy(np.asarray(x)).long())],
+            [lambda x:x, remap_ambiguous()]
+        ])
 
-    img_crop = 224 if args.dataset == 'imagenet' else 64
-    img_size = 256 if args.dataset == 'imagenet' else 64
-
-    train_dataset = datasets.ImageFolder(
-        traindir,
-        transforms.Compose([
-            transforms.RandomResizedCrop(img_crop),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ]))
+    train_dataset = datasets.VOCSegmentation(
+        datafolder, '2012', 'train', download=False, transforms=train_transform)
+    val_dataset = datasets.VOCSegmentation(
+        datafolder, '2012', 'val', download=False, transforms=valid_transform)
 
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
@@ -252,13 +256,7 @@ def main_worker(gpu, ngpus_per_node, args):
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(img_size),
-            transforms.CenterCrop(img_crop),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
+        val_dataset, batch_size=1, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
@@ -299,8 +297,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     data_time = AverageMeter()
     CE_losses = AverageMeter()
     AP_losses = AverageMeter()
-    top1 = AverageMeter()
-    top5 = AverageMeter()
+    MIOU = AverageMeter()
     layers = layers_list(model.module)
 
     # switch to train mode
@@ -326,15 +323,19 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         AP_loss = map(angle_penalty_loss, layers)
         AP_loss = sum(AP_loss)/len(AP_loss)
 
+        batch_size = target.size(0)
+        output = output['out'].view(batch_size, num_classes, -1)
+        target = target.view(batch_size, -1)
+
         CE_loss = criterion(output, target)
-        loss = CE_loss + alpha*AP_loss
+        # loss = CE_loss + alpha*AP_loss
+        loss = CE_loss
 
         # measure accuracy and record loss
-        acc1, acc5 = accuracy(output, target, topk=(1, 5))
+        acc = compute_miou(output, target)
         CE_losses.update(CE_loss.item(), input.size(0))
         AP_losses.update(AP_loss.data.item(), input.size(0))
-        top1.update(acc1[0], input.size(0))
-        top5.update(acc5[0], input.size(0))
+        MIOU.update(acc, input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -345,23 +346,22 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-    print('Epoch: [{0}]\t'
-          'Time {batch_time.avg:.3f}\t'
-          'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
-          'Acc@1 {top1.avg:.3f}\t'
-          'alpha {alpha:0.2f}\t'
-          'lr {lr:0.1e}'.format(
-           epoch, batch_time=batch_time,
-           loss=CE_losses, AP_loss=AP_losses, top1=top1, alpha=alpha,
-           lr=optimizer.param_groups[0]['lr']))
+        print('Epoch: [{0}]\t'
+              'Time {batch_time.avg:.3f}\t'
+              'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
+              'MIOU {MIOU.avg:.3f}\t'
+              'alpha {alpha:0.2f}\t'
+              'lr {lr:0.1e}'.format(
+               epoch, batch_time=batch_time,
+               loss=CE_losses, AP_loss=AP_losses, MIOU=MIOU, alpha=alpha,
+               lr=optimizer.param_groups[0]['lr']))
 
 
 def validate(val_loader, model, criterion, args):
     batch_time = AverageMeter()
     CE_losses = AverageMeter()
     AP_losses = AverageMeter()
-    top1 = AverageMeter()
-    top5 = AverageMeter()
+    MIOU = AverageMeter()
     layers = layers_list(model.module)
 
     # switch to evaluate mode
@@ -384,15 +384,17 @@ def validate(val_loader, model, criterion, args):
             AP_loss = map(angle_penalty_loss, layers)
             AP_loss = sum(AP_loss)/len(AP_loss)
 
+            batch_size = target.size(0)
+            output = output['out'].view(batch_size, num_classes, -1)
+            target = target.view(batch_size, -1)
+
             CE_loss = criterion(output, target)
-            loss = CE_loss + alpha*AP_loss
 
             # measure accuracy and record loss
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            acc = compute_miou(output, target)
             CE_losses.update(CE_loss.item(), input.size(0))
             AP_losses.update(AP_loss.data.item(), input.size(0))
-            top1.update(acc1[0], input.size(0))
-            top5.update(acc5[0], input.size(0))
+            MIOU.update(acc, input.size(0))
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -401,11 +403,11 @@ def validate(val_loader, model, criterion, args):
         print('Test:\t\t'
               'Time {batch_time.avg:.3f}\t'
               'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
-              'Acc@1 {top1.avg:.3f}\t'
+              'MIOUs {MIOU.avg:.3f}\t'
               'alpha {alpha:0.2f}'.format(
-               batch_time=batch_time, loss=CE_losses, AP_loss=AP_losses, top1=top1, alpha=alpha))
+               batch_time=batch_time, loss=CE_losses, AP_loss=AP_losses, MIOU=MIOU, alpha=alpha))
 
-    return top1.avg
+    return MIOU.avg
 
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
@@ -447,21 +449,22 @@ def adjust_alpha(epoch, args):
     alpha = 10000 if alpha > 10000 else alpha
 
 
-def accuracy(output, target, topk=(1,)):
-    """Computes the accuracy over the k top predictions for the specified values of k"""
+def compute_miou(output, target):
     with torch.no_grad():
-        maxk = max(topk)
-        batch_size = target.size(0)
+        # Note: The network shouldn't be labeling pixels as ambiguous
+        output = output.max(dim=1).indices                          # Batch x Classes x H*W => B x H*W
 
-        _, pred = output.topk(maxk, 1, True, True)
-        pred = pred.t()
-        correct = pred.eq(target.view(1, -1).expand_as(pred))
+        intersection = torch.eq(output, target).int().sum(dim=1)
+        intersection_background = ((output==0) & (target==0)).int().sum(dim=1)
+        intersection_ambiguous = ((output==20) & (target==20)).int().sum(dim=1)
+        intersection -= (intersection_background + intersection_ambiguous)
 
-        res = []
-        for k in topk:
-            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
-            res.append(correct_k.mul_(100.0 / batch_size))
-        return res
+        union = ((output!=0).int() + (target!=0).int()).sum(dim=1) - intersection
+        union_ambiguous = ((output==20).int() + (target==20).int()).sum(dim=1)
+        union -= union_ambiguous
+        iou = intersection.float() / union
+        miou = iou.mean(dim=0)
+        return miou
 
 
 # Create list with conv2d
