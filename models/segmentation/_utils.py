@@ -77,6 +77,34 @@ class RandomResizedCropJoint(transforms.RandomResizedCrop):
         return img, target
 
 
+class RandomCropJoint(transforms.RandomCrop):
+    def __init__(self, **kwargs):
+        super(RandomCropJoint, self).__init__(**kwargs)
+
+    def __call__(self, img, target):
+        """
+        Args:
+            img (PIL Image): Image to be cropped.
+
+        Returns:
+            PIL Image: Cropped image.
+        """
+        if self.padding is not None:
+            img = \
+                VF.pad(img, self.padding, self.fill, self.padding_mode)
+
+        # pad the width if needed
+        if self.pad_if_needed and img.size[0] < self.size[1]:
+            img = VF.pad(img, (self.size[1] - img.size[0], 0), self.fill, self.padding_mode)
+        # pad the height if needed
+        if self.pad_if_needed and img.size[1] < self.size[0]:
+            img = VF.pad(img, (0, self.size[0] - img.size[1]), self.fill, self.padding_mode)
+
+        i, j, h, w = self.get_params(img, self.size)
+
+        return VF.crop(img, i, j, h, w), VF.crop(target, i, j, h, w)
+
+
 class remap_ambiguous(object):
     def __call__(self, img):
         img[img == 255] = 21

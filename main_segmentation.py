@@ -18,7 +18,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 # import torchvision.models as models
 import models
-from models.segmentation._utils import ComposeJoint, RandomHorizontalFlipJoint, RandomResizedCropJoint, remap_ambiguous
+from models.segmentation._utils import *
 import numpy as np
 
 model_names = sorted(name for name in models.segmentation.__dict__
@@ -44,7 +44,7 @@ parser.add_argument('-b', '--batch-size', default=16, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
@@ -85,7 +85,7 @@ parser.add_argument('--freeze-W', dest='freeze_W', action='store_true',
 
 best_acc1 = 0
 alpha = None
-num_classes = 22        # 20 + background + ambiguous
+num_classes = 22        # 21 (including background) + ambiguous
 
 def main():
     global alpha
@@ -189,7 +189,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # define loss function (criterion) and optimizer
     class_weights = torch.ones(num_classes)
-    class_weights[0] = 0.5        # Background
+    class_weights[0] = 1        # Background
     class_weights[21] = 0       # Ambiguous
     criterion = nn.CrossEntropyLoss(class_weights).cuda(args.gpu)
 
@@ -221,13 +221,13 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Data loading code
     if args.dataset == 'VOC':
-        # datafolder = '/data/benm/Pascal_VOC/'
-        datafolder = '/data/Datasets/'
+        datafolder_VOC = '/data/Datasets/PASCAL_VOC'
+        datafolder_SBD = '/data/Datasets/SBD'
 
     train_transform = ComposeJoint(
         [
             RandomHorizontalFlipJoint(),
-            RandomResizedCropJoint(size=224, scale=(0.8, 1.0)),
+            RandomCropJoint(size=224, pad_if_needed=True),
             [transforms.ToTensor(), lambda x:x],
             [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)), lambda x:x],
             [lambda x:x, transforms.Lambda(lambda x: torch.from_numpy(np.asarray(x)).long())],
@@ -235,28 +235,32 @@ def main_worker(gpu, ngpus_per_node, args):
         ])
     valid_transform = ComposeJoint(
         [
+            RandomCropJoint(size=224, pad_if_needed=True),
             [transforms.ToTensor(), lambda x:x],
             [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)), lambda x:x],
             [lambda x:x, transforms.Lambda(lambda x: torch.from_numpy(np.asarray(x)).long())],
             [lambda x:x, remap_ambiguous()]
         ])
 
-    train_dataset = datasets.VOCSegmentation(
-        datafolder, '2012', 'train', download=False, transforms=train_transform)
+    train_dataset_VOC = datasets.VOCSegmentation(
+        datafolder_VOC, '2012', 'train', download=False, transforms=train_transform)
+    train_dataset_SBD = datasets.SBDataset(
+        datafolder_SBD, 'train_noval', 'segmentation', download=False, transforms=train_transform)
     val_dataset = datasets.VOCSegmentation(
-        datafolder, '2012', 'val', download=False, transforms=valid_transform)
+        datafolder_VOC, '2012', 'val', download=False, transforms=valid_transform)
 
-    if args.distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-    else:
-        train_sampler = None
+    train_sampler = None
 
-    train_loader = torch.utils.data.DataLoader(
-        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+    train_loader_VOC = torch.utils.data.DataLoader(
+        train_dataset_VOC, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+
+    train_loader_SBD = torch.utils.data.DataLoader(
+        train_dataset_SBD, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=1, shuffle=False,
+        val_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
@@ -270,7 +274,8 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_alpha(epoch, args)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch, args)
+        train(train_loader_VOC, model, criterion, optimizer, epoch, args)
+        train(train_loader_SBD, model, criterion, optimizer, epoch, args)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)
@@ -320,7 +325,7 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         output = model(input)
 
         # Angle Regularization
-        AP_loss = map(angle_penalty_loss, layers)
+        AP_loss = list(map(angle_penalty_loss, layers))
         AP_loss = sum(AP_loss)/len(AP_loss)
 
         batch_size = target.size(0)
@@ -346,15 +351,15 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         batch_time.update(time.time() - end)
         end = time.time()
 
-        print('Epoch: [{0}]\t'
-              'Time {batch_time.avg:.3f}\t'
-              'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
-              'MIOU {MIOU.avg:.3f}\t'
-              'alpha {alpha:0.2f}\t'
-              'lr {lr:0.1e}'.format(
-               epoch, batch_time=batch_time,
-               loss=CE_losses, AP_loss=AP_losses, MIOU=MIOU, alpha=alpha,
-               lr=optimizer.param_groups[0]['lr']))
+    print('Epoch: [{0}]\t'
+          'Time {batch_time.avg:.3f}\t'
+          'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
+          'MIOU {MIOU.avg:.3f}\t'
+          'alpha {alpha:0.2f}\t'
+          'lr {lr:0.1e}'.format(
+           epoch, batch_time=batch_time,
+           loss=CE_losses, AP_loss=AP_losses, MIOU=MIOU, alpha=alpha,
+           lr=optimizer.param_groups[0]['lr']))
 
 
 def validate(val_loader, model, criterion, args):
@@ -381,7 +386,7 @@ def validate(val_loader, model, criterion, args):
             output = model(input)
 
             # Angle Regularization
-            AP_loss = map(angle_penalty_loss, layers)
+            AP_loss = list(map(angle_penalty_loss, layers))
             AP_loss = sum(AP_loss)/len(AP_loss)
 
             batch_size = target.size(0)
@@ -403,7 +408,7 @@ def validate(val_loader, model, criterion, args):
         print('Test:\t\t'
               'Time {batch_time.avg:.3f}\t'
               'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
-              'MIOUs {MIOU.avg:.3f}\t'
+              'MIOU {MIOU.avg:.3f}\t'
               'alpha {alpha:0.2f}'.format(
                batch_time=batch_time, loss=CE_losses, AP_loss=AP_losses, MIOU=MIOU, alpha=alpha))
 
@@ -437,7 +442,7 @@ class AverageMeter(object):
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 25))
+    lr = args.lr * (0.1 ** (epoch // 30))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
@@ -450,20 +455,21 @@ def adjust_alpha(epoch, args):
 
 
 def compute_miou(output, target):
+    eps = 1e-6
     with torch.no_grad():
         # Note: The network shouldn't be labeling pixels as ambiguous
         output = output.max(dim=1).indices                          # Batch x Classes x H*W => B x H*W
 
-        intersection = torch.eq(output, target).int().sum(dim=1)
-        intersection_background = ((output==0) & (target==0)).int().sum(dim=1)
-        intersection_ambiguous = ((output==20) & (target==20)).int().sum(dim=1)
-        intersection -= (intersection_background + intersection_ambiguous)
+        miou = 0
 
-        union = ((output!=0).int() + (target!=0).int()).sum(dim=1) - intersection
-        union_ambiguous = ((output==20).int() + (target==20).int()).sum(dim=1)
-        union -= union_ambiguous
-        iou = intersection.float() / union
-        miou = iou.mean(dim=0)
+        # Background is considered a class, but not ambiguous
+        for k in range(num_classes-1):
+            intersection = ((output==k) & (target==k)).int().sum()
+            union = ((output==k).int() + (target==k).int()).sum() - intersection
+            miou += (intersection.float() + eps) / (union + eps)
+
+        miou /= (num_classes-1)
+
         return miou
 
 
