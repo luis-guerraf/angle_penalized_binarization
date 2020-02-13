@@ -537,40 +537,33 @@ def angle_penalty_loss(layer):
     #endregion
 
     #region ### Quantized k-bit weights ###
-    # elif args.bitw > 1:
-    #     if args.mode == 'layerwise':
-    #         # Layer-wise
-    #         W_q = models.quantized_ops.DoReFa_W(layer.weight, models.quantized_ops.bitW).detach()
-    #         W_r = W_r.view(-1)
-    #         W_q = W_q.view(-1)
-    #         dot_prod = torch.dot(W_r, W_q)
-    #         norms = torch.norm(W_r, p=2) * torch.norm(W_q, p=2)
-    #         angle = 1 - dot_prod / norms
-    #
-    #     elif args.mode == 'channelwise':
-    #         # Channel-wise
-    #         ones = torch.ones(W_r.shape[0]).cuda()
-    #         dot_prod = torch.zeros(W_r.shape[0]).cuda()
-    #         norms = torch.zeros(W_r.shape[0]).cuda()
-    #         for out_channel in range(W_r.shape[0]):
-    #             channel_r = W_r[out_channel].view(-1)
-    #             channel_q = models.quantized_ops.DoReFa_W(channel_r, models.quantized_ops.bitW).detach()
-    #             dot_prod[out_channel] = torch.dot(channel_r, channel_q)
-    #             norms[out_channel] = torch.norm(channel_r, p=2) * torch.norm(channel_q, p=2)
-    #         angle = torch.mean(ones - dot_prod / (norms))
-    #
-    #     elif args.mode == 'kernelwise':
-    #         # Kernel-wise
-    #         ones = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
-    #         dot_prod = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
-    #         norms = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
-    #         for out_channel in range(W_r.shape[0]):
-    #             for in_channel in range(W_r.shape[1]):
-    #                 kernel_r = W_r[out_channel, in_channel].view(-1)
-    #                 kernel_q = models.quantized_ops.DoReFa_W(kernel_r, models.quantized_ops.bitW).detach()
-    #                 dot_prod[out_channel, in_channel] = torch.dot(kernel_r, kernel_q)
-    #                 norms[out_channel, in_channel] = torch.norm(kernel_r, p=2)*torch.norm(kernel_q, p=2)
-    #         angle = torch.mean(ones - dot_prod / (norms))
+    elif args.bitw > 1:
+        W_q = models.quantized_ops.DoReFa_W(W_r, args.bitw).detach()
+        if args.mode == 'layerwise':
+            # Layer-wise
+            W_r = W_r.view(-1)
+            W_q = W_q.view(-1)
+            dot_prod = torch.dot(W_r, W_q)
+            norms = torch.norm(W_r, p=2) * torch.norm(W_q, p=2)
+            angle = 1 - dot_prod / norms
+
+        elif args.mode == 'channelwise':
+            # Channel-wise
+            ones = torch.ones(W_r.shape[0]).cuda()
+            W_r = W_r.view(W_r.shape[0], -1)
+            W_q = W_q.view(W_q.shape[0], -1)
+            dot_prod = torch.bmm(W_r.unsqueeze(1), W_q.unsqueeze(-1)).squeeze()
+            norms = torch.norm(W_r, p=2, dim=1) * torch.norm(W_q, p=2, dim=1)
+            angle = torch.mean(ones - dot_prod / norms)
+
+        elif args.mode == 'kernelwise':
+            # Kernel-wise
+            ones = torch.ones(W_r.shape[0] * W_r.shape[1]).cuda()
+            W_r = W_r.view(-1, W_r.shape[2] * W_r.shape[3])
+            W_q = W_q.view(-1, W_q.shape[2] * W_q.shape[3])
+            dot_prod = torch.bmm(W_r.unsqueeze(1), W_q.unsqueeze(-1)).squeeze()
+            norms = torch.norm(W_r, p=2, dim=1) * torch.norm(W_q, p=2, dim=1)
+            angle = torch.mean(ones - dot_prod / norms)
 
     #endregion
 
