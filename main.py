@@ -81,14 +81,23 @@ parser.add_argument('--non-lazy', dest='non_lazy', action='store_true',
                     help='Lazy (STE) or non-lazy projection')
 parser.add_argument('--freeze-W', dest='freeze_W', action='store_true',
                     help='Freeze weights to fine-tune batch-norm parameters')
+parser.add_argument('--learnable-scalings', dest='learnable_scalings', action='store_true',
+                    help='Learnable scalings')
+parser.add_argument('--mode', default=None, choices=['layerwise', 'channelwise', 'kernelwise'],
+                    help='dataset')
+
 
 best_acc1 = 0
 alpha = None
+args = None
 
 def main():
-    global alpha
+    global alpha, args
     args = parser.parse_args()
     alpha = args.alpha
+
+    # Set up
+    set_up()
 
     if args.seed is not None:
         random.seed(args.seed)
@@ -140,11 +149,6 @@ def main_worker(gpu, ngpus_per_node, args):
                                 world_size=args.world_size, rank=args.rank)
 
     # create model
-    if args.non_lazy:
-        models.quantized_ops.bitW = 32
-    else:
-        models.quantized_ops.bitW = args.bitw
-
     num_classes = 1000 if args.dataset == 'imagenet' else 200
     if args.pretrained:
         print("=> using pre-trained model '{}'".format(args.arch))
@@ -154,9 +158,9 @@ def main_worker(gpu, ngpus_per_node, args):
         model = models.__dict__[args.arch](num_classes=num_classes)
 
     # Init learnable scalings
-    dummy_layer_list = layers_list(model)
-    for dummy in dummy_layer_list:
-        dummy.init_scalings()
+    if args.learnable_scalings:
+        for l in layers_list(model):
+            l.init_scalings()
 
     if args.distributed:
         # For multiprocessing distributed, DistributedDataParallel constructor
@@ -188,7 +192,7 @@ def main_worker(gpu, ngpus_per_node, args):
             model = torch.nn.DataParallel(model).cuda()
 
     if args.freeze_W:
-        map(freeze_weights, layers_list(model.module))
+        list(map(freeze_weights, layers_list(model.module)))
 
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
@@ -198,10 +202,13 @@ def main_worker(gpu, ngpus_per_node, args):
         optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                     momentum=args.momentum, weight_decay=args.weight_decay)
     else:
-        # Adam (lr=1e-3, wd=1e-6) is better for quantized networks  (except with APSQ)
-        optimizer = torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.weight_decay)
-        # optimizer = torch.optim.SGD(model.parameters(), args.lr,
-        #                             momentum=args.momentum, weight_decay=args.weight_decay)
+        if args.learnable_scalings:
+            # Adam (lr=1e-3, wd=1e-6) is better for quantized networks  (except with APSQ)
+            optimizer = torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.weight_decay)
+        else:
+            # APSQ works better with SGD
+            optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                        momentum=args.momentum, weight_decay=args.weight_decay)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -221,9 +228,9 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # Data loading code
     if args.dataset == 'imagenet':
-        datafolder = '../../Datasets/IMAGENET/ImageNet_smallSize256/'
+        datafolder = '/data/Datasets/IMAGENET/ImageNet_smallSize256/'
     elif args.dataset == 'tiny_imagenet':
-        datafolder = '../../Datasets/IMAGENET/tiny-imagenet-200/'
+        datafolder = '/data/Datasets/IMAGENET/tiny-imagenet-200/'
 
     traindir = os.path.join(datafolder, 'train')
     valdir = os.path.join(datafolder, 'val')
@@ -322,12 +329,15 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
         # compute output
         output = model(input)
 
-        # Angle Regularization
-        AP_loss = map(angle_penalty_loss, layers)
-        AP_loss = sum(AP_loss)/len(AP_loss)
-
         CE_loss = criterion(output, target)
-        loss = CE_loss + alpha*AP_loss
+
+        # Angle Regularization
+        AP_loss = list(map(angle_penalty_loss, layers))
+        AP_loss = sum(AP_loss) / len(AP_loss)
+        if int(args.alpha) != 0:
+            loss = CE_loss + alpha*AP_loss
+        else:
+            loss = CE_loss
 
         # measure accuracy and record loss
         acc1, acc5 = accuracy(output, target, topk=(1, 5))
@@ -348,11 +358,12 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
     print('Epoch: [{0}]\t'
           'Time {batch_time.avg:.3f}\t'
           'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
-          'Acc@1 {top1.avg:.3f}\t'
+          'Acc@1 {top1.avg:.2f}\t'
+          'Acc@5 {top5.avg:.2f}\t'
           'alpha {alpha:0.2f}\t'
           'lr {lr:0.1e}'.format(
            epoch, batch_time=batch_time,
-           loss=CE_losses, AP_loss=AP_losses, top1=top1, alpha=alpha,
+           loss=CE_losses, AP_loss=AP_losses, top1=top1, top5=top5, alpha=alpha,
            lr=optimizer.param_groups[0]['lr']))
 
 
@@ -381,7 +392,7 @@ def validate(val_loader, model, criterion, args):
             output = model(input)
 
             # Angle Regularization
-            AP_loss = map(angle_penalty_loss, layers)
+            AP_loss = list(map(angle_penalty_loss, layers))
             AP_loss = sum(AP_loss)/len(AP_loss)
 
             CE_loss = criterion(output, target)
@@ -401,9 +412,13 @@ def validate(val_loader, model, criterion, args):
         print('Test:\t\t'
               'Time {batch_time.avg:.3f}\t'
               'Loss {loss.avg:.4f} + {AP_loss.avg:.4f}\t'
-              'Acc@1 {top1.avg:.3f}\t'
+              'Acc@1 {top1.avg:.2f}\t'
+              'Acc@5 {top5.avg:.2f}\t'
               'alpha {alpha:0.2f}'.format(
-               batch_time=batch_time, loss=CE_losses, AP_loss=AP_losses, top1=top1, alpha=alpha))
+               batch_time=batch_time, loss=CE_losses, AP_loss=AP_losses, top1=top1, top5=top5, alpha=alpha))
+
+    if args.non_lazy:
+        models.quantized_ops.bitW = 32
 
     return top1.avg
 
@@ -435,6 +450,7 @@ class AverageMeter(object):
 
 def adjust_learning_rate(optimizer, epoch, args):
     """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    # lr = args.lr * (0.1 ** (epoch // 25))
     lr = args.lr * (0.1 ** (epoch // 10))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
@@ -484,69 +500,77 @@ def angle_penalty_loss(layer):
     W_r = layer.weight
 
     # L1 and L2 binarization
-    W_q = layer.weight.sign().detach()
-    angle = torch.norm(W_r - W_q, p=1)/W_r.nelement()
+    # W_q = layer.weight.sign().detach()
+    # angle = torch.norm(W_r - W_q, p=1)/W_r.nelement()
 
     #region ### Binary weights ###
-    # Layer-wise
-    # W_r = W_r.view(-1)
-    # sqrt_n = math.sqrt(len(W_r))
-    # angle = 1 - (torch.norm(W_r, p=1) / (torch.norm(W_r, p=2)*sqrt_n))
+    if args.bitw == 1:
+        if args.mode == 'layerwise':
+            # Layer-wise
+            W_r = W_r.view(-1)
+            sqrt_n = math.sqrt(len(W_r))
+            angle = 1 - (torch.norm(W_r, p=1) / (torch.norm(W_r, p=2)*sqrt_n))
 
-    # Channel-wise
-    # ones = torch.ones(W_r.shape[0]).cuda()
-    # norm_1 = torch.norm(W_r.view(W_r.shape[0], -1), p=1, dim=1)
-    # norm_2 = torch.norm(W_r.view(W_r.shape[0], -1), p=2, dim=1)
-    # sqrt_n = math.sqrt(W_r.view(W_r.shape[0], -1).shape[1])
-    # angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
+        elif args.mode == 'channelwise':
+            # Channel-wise
+            ones = torch.ones(W_r.shape[0]).cuda()
+            norm_1 = torch.norm(W_r.view(W_r.shape[0], -1), p=1, dim=1)
+            norm_2 = torch.norm(W_r.view(W_r.shape[0], -1), p=2, dim=1)
+            sqrt_n = math.sqrt(W_r.view(W_r.shape[0], -1).shape[1])
+            angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
 
-    # Kernel-wise
-    # if isinstance(layer, models.quantized_ops.QuantizedConv1d):
-    #     ones = torch.ones(W_r.shape[0]).cuda()
-    #     norm_1 = torch.norm(W_r.view(W_r.shape[0], -1), p=1, dim=1)
-    #     norm_2 = torch.norm(W_r.view(W_r.shape[0], -1), p=2, dim=1)
-    #     sqrt_n = math.sqrt(W_r.view(W_r.shape[0], -1).shape[1])
-    #     angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
-    # else:
-    #     ones = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
-    #     norm_1 = torch.norm(W_r.view(W_r.shape[0], W_r.shape[1], -1), p=1, dim=2)
-    #     norm_2 = torch.norm(W_r.view(W_r.shape[0], W_r.shape[1], -1), p=2, dim=2)
-    #     sqrt_n = math.sqrt(W_r.view(W_r.shape[0], W_r.shape[1], -1).shape[2])
-    #     angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
+        elif args.mode == 'kernelwise':
+            # Kernel-wise
+            if isinstance(layer, models.quantized_ops.QuantizedConv1d):
+                ones = torch.ones(W_r.shape[0]).cuda()
+                norm_1 = torch.norm(W_r.view(W_r.shape[0], -1), p=1, dim=1)
+                norm_2 = torch.norm(W_r.view(W_r.shape[0], -1), p=2, dim=1)
+                sqrt_n = math.sqrt(W_r.view(W_r.shape[0], -1).shape[1])
+                angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
+            else:
+                ones = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+                norm_1 = torch.norm(W_r.view(W_r.shape[0], W_r.shape[1], -1), p=1, dim=2)
+                norm_2 = torch.norm(W_r.view(W_r.shape[0], W_r.shape[1], -1), p=2, dim=2)
+                sqrt_n = math.sqrt(W_r.view(W_r.shape[0], W_r.shape[1], -1).shape[2])
+                angle = torch.mean(ones - norm_1 / (norm_2 * sqrt_n))
 
     #endregion
 
     #region ### Quantized k-bit weights ###
-    # Layer-wise
-    # W_q = models.quantized_ops.DoReFa_W(layer.weight, models.quantized_ops.bitW).detach()
-    # W_r = W_r.view(-1)
-    # W_q = W_q.view(-1)
-    # dot_prod = torch.dot(W_r, W_q)
-    # norms = torch.norm(W_r, p=2) * torch.norm(W_q, p=2)
-    # angle = 1 - dot_prod / norms
-
-    # Channel-wise
-    # ones = torch.ones(W_r.shape[0]).cuda()
-    # dot_prod = torch.zeros(W_r.shape[0]).cuda()
-    # norms = torch.zeros(W_r.shape[0]).cuda()
-    # for out_channel in range(W_r.shape[0]):
-    #     channel_r = W_r[out_channel].view(-1)
-    #     channel_q = models.quantized_ops.DoReFa_W(channel_r, models.quantized_ops.bitW).detach()
-    #     dot_prod[out_channel] = torch.dot(channel_r, channel_q)
-    #     norms[out_channel] = torch.norm(channel_r, p=2) * torch.norm(channel_q, p=2)
-    # angle = torch.mean(ones - dot_prod / (norms))
-
-    # Kernel-wise
-    # ones = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
-    # dot_prod = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
-    # norms = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
-    # for out_channel in range(W_r.shape[0]):
-    #     for in_channel in range(W_r.shape[1]):
-    #         kernel_r = W_r[out_channel, in_channel].view(-1)
-    #         kernel_q = models.quantized_ops.DoReFa_W(kernel_r, models.quantized_ops.bitW).detach()
-    #         dot_prod[out_channel, in_channel] = torch.dot(kernel_r, kernel_q)
-    #         norms[out_channel, in_channel] = torch.norm(kernel_r, p=2)*torch.norm(kernel_q, p=2)
-    # angle = torch.mean(ones - dot_prod / (norms))
+    # elif args.bitw > 1:
+    #     if args.mode == 'layerwise':
+    #         # Layer-wise
+    #         W_q = models.quantized_ops.DoReFa_W(layer.weight, models.quantized_ops.bitW).detach()
+    #         W_r = W_r.view(-1)
+    #         W_q = W_q.view(-1)
+    #         dot_prod = torch.dot(W_r, W_q)
+    #         norms = torch.norm(W_r, p=2) * torch.norm(W_q, p=2)
+    #         angle = 1 - dot_prod / norms
+    #
+    #     elif args.mode == 'channelwise':
+    #         # Channel-wise
+    #         ones = torch.ones(W_r.shape[0]).cuda()
+    #         dot_prod = torch.zeros(W_r.shape[0]).cuda()
+    #         norms = torch.zeros(W_r.shape[0]).cuda()
+    #         for out_channel in range(W_r.shape[0]):
+    #             channel_r = W_r[out_channel].view(-1)
+    #             channel_q = models.quantized_ops.DoReFa_W(channel_r, models.quantized_ops.bitW).detach()
+    #             dot_prod[out_channel] = torch.dot(channel_r, channel_q)
+    #             norms[out_channel] = torch.norm(channel_r, p=2) * torch.norm(channel_q, p=2)
+    #         angle = torch.mean(ones - dot_prod / (norms))
+    #
+    #     elif args.mode == 'kernelwise':
+    #         # Kernel-wise
+    #         ones = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+    #         dot_prod = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+    #         norms = torch.ones(W_r.shape[0], W_r.shape[1]).cuda()
+    #         for out_channel in range(W_r.shape[0]):
+    #             for in_channel in range(W_r.shape[1]):
+    #                 kernel_r = W_r[out_channel, in_channel].view(-1)
+    #                 kernel_q = models.quantized_ops.DoReFa_W(kernel_r, models.quantized_ops.bitW).detach()
+    #                 dot_prod[out_channel, in_channel] = torch.dot(kernel_r, kernel_q)
+    #                 norms[out_channel, in_channel] = torch.norm(kernel_r, p=2)*torch.norm(kernel_q, p=2)
+    #         angle = torch.mean(ones - dot_prod / (norms))
 
     #endregion
 
@@ -556,6 +580,24 @@ def angle_penalty_loss(layer):
 def freeze_weights(layer):
     for param in layer.parameters():
         param.requires_grad = False
+
+
+def set_up():
+    # assert not (args.learnable_scalings and args.alpha), "Error: Learning scalings on and alpha != 0"
+    assert not (args.alpha and args.freeze_W), "Freeze_W and alpha != 0"
+    assert not (args.learnable_scalings and args.non_lazy), "Learnable scalings and non-lazy"
+    assert not (args.learnable_scalings and args.freeze_W), "Learnable scalings and freeze-W"
+
+    if args.learnable_scalings:
+        print("Warning: Learnable scalings uses Adam, use approapiate lr and wd")
+
+    models.quantized_ops.learnable_scalings = args.learnable_scalings
+    models.quantized_ops.mode = args.mode
+
+    if args.non_lazy:
+        models.quantized_ops.bitW = 32
+    else:
+        models.quantized_ops.bitW = args.bitw
 
 
 if __name__ == '__main__':

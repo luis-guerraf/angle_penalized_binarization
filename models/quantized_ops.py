@@ -7,6 +7,8 @@ from torch.nn.parameter import Parameter
 
 
 bitW = None
+learnable_scalings = None
+mode = None
 
 
 class Binarize_W(Function):
@@ -20,52 +22,27 @@ class Binarize_W(Function):
         return grad_output
 
 
-class Xnorize_W_Layerwise(Function):
+class Xnorize_W(Function):
     @staticmethod
-    def forward(self, tensor):
-        # Binarize
-        n = tensor.nelement()
+    def forward(self, tensor, _mode):
         s = tensor.size()
-        m = tensor.norm(1, keepdim=True).div(n)
+        if _mode == "layerwise":
+            n = tensor.nelement()
+            m = tensor.norm(1, keepdim=True).div(n)
+        if _mode == "channelwise":
+            n = tensor[0].nelement()
+            m = tensor.norm(1, dim=[1,2,3], keepdim=True).div(n)
+        if _mode == "kernelwise":
+            n = tensor[0, 0].nelement()
+            m = tensor.norm(1, dim=[2,3], keepdim=True).div(n)
+
         tensor = tensor.sign().mul(m.expand(s))
 
         return tensor
 
     @staticmethod
     def backward(self, grad_output):
-        return grad_output
-
-
-class Xnorize_W_Channelwise(Function):
-    @staticmethod
-    def forward(self, tensor):
-        # Binarize
-        n = tensor[0].nelement()
-        s = tensor.size()
-        m = tensor.norm(1, 3, keepdim=True).sum(2, keepdim=True).sum(1, keepdim=True).div(n)
-        tensor = tensor.sign().mul(m.expand(s))
-
-        return tensor
-
-    @staticmethod
-    def backward(self, grad_output):
-        return grad_output
-
-
-class Xnorize_W_Kernelwise(Function):
-    @staticmethod
-    def forward(self, tensor):
-        # Binarize
-        n = tensor[0, 0].nelement()
-        s = tensor.size()
-        m = tensor.norm(1, 3, keepdim=True).sum(2, keepdim=True).div(n)
-        tensor = tensor.sign().mul(m.expand(s))
-
-        return tensor
-
-    @staticmethod
-    def backward(self, grad_output):
-        return grad_output
+        return grad_output, None
 
 
 def DoReFa_W(x, numBits):
@@ -110,18 +87,29 @@ class QuantizedConv2d(nn.Conv2d):
         super(QuantizedConv2d, self).__init__(in_channels, out_channels, kernel_size,
                                         stride=self.stride, padding=self.padding,
                                         dilation=dilation, groups=groups, bias=bias)
-        self.scale = Parameter(torch.Tensor(out_channels, in_channels).uniform_(1, 1))
+        if learnable_scalings and mode =='layerwise':
+            self.scale = Parameter(torch.Tensor(1))
+        elif learnable_scalings and mode =='channelwise':
+            self.scale = Parameter(torch.Tensor(out_channels))
+        elif learnable_scalings and mode == 'kernelwise':
+            self.scale = Parameter(torch.Tensor(out_channels, in_channels))
 
     def forward(self, input):
         if bitW == 32:
             weight = self.weight
         elif bitW == 1:
-            # For learnable scalings
-            weight = Binarize_W.apply(self.weight)
-            weight *= self.scale.unsqueeze(-1).unsqueeze(-1)
-
-            # For APSQ
-            # weight = Xnorize_W_Kernelwise.apply(self.weight)
+            if learnable_scalings:
+                # For learnable scalings
+                weight = Binarize_W.apply(self.weight)
+                if mode == 'layerwise':
+                    weight *= self.scale
+                elif mode =='channelwise':
+                    weight *= self.scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+                elif mode == 'kernelwise':
+                    weight *= self.scale.unsqueeze(-1).unsqueeze(-1)
+            else:
+                # For APSQ
+                weight = Xnorize_W.apply(self.weight, mode)
         else:
             weight = DoReFa_W(self.weight, bitW)
 
@@ -131,8 +119,16 @@ class QuantizedConv2d(nn.Conv2d):
 
     def init_scalings(self):
         tensor = self.weight
-        n = tensor[0, 0].nelement()
-        m = tensor.norm(1, 3).sum(2).div(n)
+        if mode == 'layerwise':
+            n = tensor.nelement()
+            m = tensor.norm(1).div(n)
+        elif mode == 'channelwise':
+            n = tensor[0].nelement()
+            m = tensor.norm(1, dim=[1,2,3]).div(n)
+        elif mode == 'kernelwise':
+            n = tensor[0, 0].nelement()
+            m = tensor.norm(1, dim=[2,3]).div(n)
+
         self.scale.data = m
 
 # Conv1d can only have channel-wise scaling, not kernel-wise
@@ -144,18 +140,20 @@ class QuantizedConv1d(nn.Conv2d):
         super(QuantizedConv1d, self).__init__(in_channels, out_channels, kernel_size,
                                         stride=self.stride, padding=self.padding,
                                         dilation=dilation, groups=groups, bias=bias)
-        self.scale = Parameter(torch.Tensor(out_channels).uniform_(0, 1))
+        if learnable_scalings:
+            self.scale = Parameter(torch.Tensor(out_channels).uniform_(0, 1))
 
     def forward(self, input):
         if bitW == 32:
             weight = self.weight
         elif bitW == 1:
-            # For learnable kernels
-            weight = Binarize_W.apply(self.weight)
-            weight *= self.scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-
-            # For APSQ
-            # weight = Xnorize_W_Channelwise.apply(self.weight)
+            if learnable_scalings:
+                # For learnable kernels
+                weight = Binarize_W.apply(self.weight)
+                weight *= self.scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            else:
+                # For APSQ
+                weight = Xnorize_W.apply(self.weight, 'channelwise')
         else:
             weight = DoReFa_W(self.weight, bitW)
 
