@@ -396,7 +396,6 @@ def validate(val_loader, model, criterion, args):
             AP_loss = sum(AP_loss)/len(AP_loss)
 
             CE_loss = criterion(output, target)
-            loss = CE_loss + alpha*AP_loss
 
             # measure accuracy and record loss
             acc1, acc5 = accuracy(output, target, topk=(1, 5))

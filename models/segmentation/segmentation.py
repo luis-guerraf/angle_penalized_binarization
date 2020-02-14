@@ -1,6 +1,6 @@
 from .._utils import IntermediateLayerGetter
 from ..utils import load_state_dict_from_url
-from . import resnet
+from .. import resnet
 from .deeplabv3 import DeepLabHead, DeepLabV3
 from .fcn import FCN, FCNHead
 
@@ -18,8 +18,8 @@ model_urls = {
 
 def _segm_resnet(name, backbone_name, num_classes, aux, pretrained_backbone=True):
     backbone = resnet.__dict__[backbone_name](
-        pretrained=pretrained_backbone,
-        replace_stride_with_dilation=[False, False, False])     # [False, True, True] for Bottleneck (Resnet50+)
+        pretrained=pretrained_backbone, num_classes=num_classes,
+        replace_stride_with_dilation=[False, False, False],)     # [False, True, True] for Bottleneck (Resnet50+)
 
     return_layers = {'layer4': 'out'}
     if aux:
