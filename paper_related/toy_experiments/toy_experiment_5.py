@@ -41,7 +41,7 @@ def angle_penalization(layer):
 
 # Loss surface
 x = np.arange(-4.0, 4.0, 0.01)
-y = np.arange(0, 4.0, 0.01)
+y = np.arange(0, 5.0, 0.01)
 X, Y = py.meshgrid(x, y)  # grid of point
 Z = z_func(X, Y)  # evaluation of the function on the grid
 im = py.imshow(Z, cmap=py.cm.RdBu)  # drawing the function
@@ -58,7 +58,7 @@ x = np.linspace(400, 799, 100)
 py.plot(x, x-400, linestyle='-', c='g', zorder=1)
 x = np.linspace(1, 400, 100)
 py.plot(x, 400-x, linestyle='-', c='g', zorder=1)
-x = np.linspace(1, 399, 100)
+x = np.linspace(1, 499, 100)
 py.plot(np.ones(100)*400, x, linestyle='--', c='grey', zorder=1)
 
 
