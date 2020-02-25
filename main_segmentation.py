@@ -77,8 +77,10 @@ parser.add_argument('--multiprocessing-distributed', action='store_true',
                          'multi node data parallel training')
 parser.add_argument('--alpha', default=None, type=float,
                     help='Alpha hyperparameter for regularization')
-parser.add_argument('--bitw', default=1, type=int,
+parser.add_argument('--bitW', default=1, type=int,
                     help='bitwidth of weights')
+parser.add_argument('--bitA', default=32, type=int,
+                    help='bitwidth of activations')
 parser.add_argument('--non-lazy', dest='non_lazy', action='store_true',
                     help='Lazy (STE) or non-lazy projection')
 parser.add_argument('--freeze-W', dest='freeze_W', action='store_true',
@@ -382,7 +384,7 @@ def validate(val_loader, model, criterion, args):
     model.eval()
 
     # Validate using quantized weights
-    models.quantized_ops.bitW = args.bitw
+    models.quantized_ops.bitW = args.bitW
 
     with torch.no_grad():
         end = time.time()
@@ -504,12 +506,20 @@ def angle_penalty_loss(layer):
     # Angle of the whole layer
     W_r = layer.weight
 
-    # L1 and L2 binarization
-    # W_q = layer.weight.sign().detach()
-    # angle = torch.norm(W_r - W_q, p=1)/W_r.nelement()
+    # L1 and L2 binarization for learnable scalings
+    # W_q = models.quantized_ops.Binarize_W.apply(W_r)
+    # W_q = models.quantized_ops.DoReFa_W(W_r, args.bitW, 'layerwise')
+    # if args.mode == 'layerwise':
+    #     W_q *= layer.scale
+    # elif args.mode == 'channelwise' or isinstance(layer, models.quantized_ops.QuantizedConv1d):
+    #     W_q *= layer.scale.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+    # elif args.mode == 'kernelwise':
+    #     W_q *= layer.scale.unsqueeze(-1).unsqueeze(-1)
+    # W_q = W_q.detach()
+    # angle = torch.norm(W_r - W_q, p=2)/W_r.nelement()
 
     #region ### Binary weights ###
-    if args.bitw == 1:
+    if args.bitW == 1:
         if args.mode == 'layerwise':
             # Layer-wise
             W_r = W_r.view(-1)
@@ -542,14 +552,15 @@ def angle_penalty_loss(layer):
     #endregion
 
     #region ### Quantized k-bit weights ###
-    elif args.bitw > 1:
-        W_q = models.quantized_ops.DoReFa_W(W_r, args.bitw).detach()
+    elif args.bitW > 1:
+        eps = 1e-8
+        W_q = models.quantized_ops.DoReFa_W(W_r, args.bitW, args.mode).detach()
         if args.mode == 'layerwise':
             # Layer-wise
             W_r = W_r.view(-1)
             W_q = W_q.view(-1)
             dot_prod = torch.dot(W_r, W_q)
-            norms = torch.norm(W_r, p=2) * torch.norm(W_q, p=2)
+            norms = torch.norm(W_r, p=2) * torch.norm(W_q, p=2) + eps
             angle = 1 - dot_prod / norms
 
         elif args.mode == 'channelwise':
@@ -558,7 +569,7 @@ def angle_penalty_loss(layer):
             W_r = W_r.view(W_r.shape[0], -1)
             W_q = W_q.view(W_q.shape[0], -1)
             dot_prod = torch.bmm(W_r.unsqueeze(1), W_q.unsqueeze(-1)).squeeze()
-            norms = torch.norm(W_r, p=2, dim=1) * torch.norm(W_q, p=2, dim=1)
+            norms = torch.norm(W_r, p=2, dim=1) * torch.norm(W_q, p=2, dim=1) + eps
             angle = torch.mean(ones - dot_prod / norms)
 
         elif args.mode == 'kernelwise':
@@ -567,7 +578,7 @@ def angle_penalty_loss(layer):
             W_r = W_r.view(-1, W_r.shape[2] * W_r.shape[3])
             W_q = W_q.view(-1, W_q.shape[2] * W_q.shape[3])
             dot_prod = torch.bmm(W_r.unsqueeze(1), W_q.unsqueeze(-1)).squeeze()
-            norms = torch.norm(W_r, p=2, dim=1) * torch.norm(W_q, p=2, dim=1)
+            norms = torch.norm(W_r, p=2, dim=1) * torch.norm(W_q, p=2, dim=1) + eps
             angle = torch.mean(ones - dot_prod / norms)
 
     #endregion
@@ -595,8 +606,9 @@ def set_up():
     if args.non_lazy:
         models.quantized_ops.bitW = 32
     else:
-        models.quantized_ops.bitW = args.bitw
+        models.quantized_ops.bitW = args.bitW
 
+    models.quantized_ops.bitA = args.bitA
 
 if __name__ == '__main__':
     main()
