@@ -5,7 +5,7 @@ from .deeplabv3 import DeepLabHead, DeepLabV3
 from .fcn import FCN, FCNHead
 
 
-__all__ = ['fcn_resnet18', 'fcn_resnet50', 'fcn_resnet101', 'deeplabv3_resnet50', 'deeplabv3_resnet101']
+__all__ = ['fcn_resnet18', 'fcn_resnet34', 'fcn_resnet50', 'fcn_resnet101', 'deeplabv3_resnet50', 'deeplabv3_resnet101']
 
 
 model_urls = {
@@ -17,9 +17,10 @@ model_urls = {
 
 
 def _segm_resnet(name, backbone_name, num_classes, aux, pretrained_backbone=True):
+    # temp = [False, True, True] if backbone_name == 'resnet50' else [False, False, False]
     backbone = resnet.__dict__[backbone_name](
         pretrained=pretrained_backbone, num_classes=num_classes,
-        replace_stride_with_dilation=[False, False, False],)     # [False, True, True] for Bottleneck (Resnet50+)
+        replace_stride_with_dilation=[False, False, False],)
 
     return_layers = {'layer4': 'out'}
     if aux:
@@ -35,7 +36,8 @@ def _segm_resnet(name, backbone_name, num_classes, aux, pretrained_backbone=True
         'deeplabv3': (DeepLabHead, DeepLabV3),
         'fcn': (FCNHead, FCN),
     }
-    inplanes = 512         # 512 for resnet18, 1024 resnet34, 2048 resnet50
+    inplanes_dict = {'resnet18': 512, 'resnet34': 512, 'resnet50': 2048}
+    inplanes = inplanes_dict[backbone_name]
     classifier = model_map[name][0](inplanes, num_classes)
     base_model = model_map[name][1]
 
@@ -67,6 +69,17 @@ def fcn_resnet18(pretrained=False, progress=True,
         progress (bool): If True, displays a progress bar of the download to stderr
     """
     return _load_model('fcn', 'resnet18', pretrained, progress, num_classes, aux_loss, **kwargs)
+
+
+def fcn_resnet34(pretrained=False, progress=True,
+                 num_classes=21, aux_loss=None, **kwargs):
+    """Constructs a Fully-Convolutional Network model with a ResNet-34 backbone.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on COCO train2017 which
+            contains the same classes as Pascal VOC
+        progress (bool): If True, displays a progress bar of the download to stderr
+    """
+    return _load_model('fcn', 'resnet34', pretrained, progress, num_classes, aux_loss, **kwargs)
 
 
 def fcn_resnet50(pretrained=False, progress=True,

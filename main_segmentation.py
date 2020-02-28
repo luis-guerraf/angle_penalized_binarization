@@ -204,7 +204,7 @@ def main_worker(gpu, ngpus_per_node, args):
         optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                     momentum=args.momentum, weight_decay=args.weight_decay)
     else:
-        if args.learnable_scalings:
+        if args.learnable_scalings or int(args.alpha) == 0:
             # Adam (lr=1e-3, wd=1e-6) is better for quantized networks  (except with APSQ)
             optimizer = torch.optim.Adam(model.parameters(), args.lr, weight_decay=args.weight_decay)
         else:
@@ -464,7 +464,7 @@ def adjust_learning_rate(optimizer, epoch, args):
 def adjust_alpha(epoch, args):
     global alpha
     # alpha *= 1.3      # exponential
-    alpha = args.alpha ** (epoch // 5 + 1)      # multi-step
+    alpha = args.alpha ** (epoch // 10 + 1)      # multi-step
     alpha = 10000 if alpha > 10000 else alpha
 
 
@@ -493,10 +493,10 @@ def layers_list(layer):
     layers = []
     for m_name in layer.__dict__['_modules']:
         m = layer.__dict__['_modules'][m_name]
-        if (isinstance(m, nn.Sequential)) or \
+        if (isinstance(m, nn.Sequential)) or (m.__class__.__name__ == 'IntermediateLayerGetter') or \
                 (m.__class__.__name__ == 'BasicBlock') or (m.__class__.__name__ == 'Bottleneck'):
             layers += layers_list(m)
-        if isinstance(m, nn.Conv2d):
+        if isinstance(m, models.quantized_ops.QuantizedConv2d) or isinstance(m, models.quantized_ops.QuantizedConv1d):
             layers += [m]
 
     return layers
