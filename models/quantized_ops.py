@@ -6,6 +6,7 @@ from torch.autograd import Function
 from torch.nn.parameter import Parameter
 
 
+bitScale = None
 bitW = None
 bitA = None
 learnable_scalings = None
@@ -52,6 +53,10 @@ class Xnorize_W(Function):
         if _mode == "kernelwise":
             n = tensor[0, 0].nelement()
             m = tensor.norm(1, dim=[2,3], keepdim=True).div(n)
+
+        # Quantize scalings
+        if bitScale != 32:
+            m = quantize(torch.clamp(m, 0, 1), bitScale)
 
         tensor = tensor.sign().mul(m.expand(s))
 
