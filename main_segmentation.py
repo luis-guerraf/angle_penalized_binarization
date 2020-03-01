@@ -81,6 +81,8 @@ parser.add_argument('--bitW', default=1, type=int,
                     help='bitwidth of weights')
 parser.add_argument('--bitA', default=32, type=int,
                     help='bitwidth of activations')
+parser.add_argument('--bitScale', default=32, type=int,
+                    help='bitwidth of activations')
 parser.add_argument('--non-lazy', dest='non_lazy', action='store_true',
                     help='Lazy (STE) or non-lazy projection')
 parser.add_argument('--freeze-W', dest='freeze_W', action='store_true',
@@ -609,6 +611,7 @@ def set_up():
         models.quantized_ops.bitW = args.bitW
 
     models.quantized_ops.bitA = args.bitA
+    models.quantized_ops.bitScale = args.bitScale
 
 if __name__ == '__main__':
     main()

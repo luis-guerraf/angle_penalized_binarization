@@ -227,6 +227,8 @@ def _resnet(arch, block, layers, pretrained, progress, **kwargs):
         if kwargs['num_classes'] != 1000:
             state_dict.pop('fc.weight')
             state_dict.pop('fc.bias')
+        if kwargs['num_classes'] == 200:
+            state_dict.pop('conv1.weight')
         model.load_state_dict(state_dict, strict=False)
     return model
 
