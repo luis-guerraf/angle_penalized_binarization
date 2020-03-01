@@ -21,13 +21,14 @@ import models
 from models.segmentation._utils import *
 import numpy as np
 import math
+from models.datasets import CocoStuff164k
 
 model_names = sorted(name for name in models.segmentation.__dict__
     if name.islower() and not name.startswith("__")
     and callable(models.segmentation.__dict__[name]))
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
-parser.add_argument('--dataset', default='VOC', choices=['VOC'],
+parser.add_argument('--dataset', default='VOC', choices=['VOC', 'COCO'],
                     help='dataset')
 parser.add_argument('-a', '--arch', metavar='ARCH', default='fcn_resnet18',
                     choices=model_names,
@@ -95,12 +96,13 @@ parser.add_argument('--mode', default=None, choices=['layerwise', 'channelwise',
 best_acc1 = 0
 alpha = None
 args = None
-num_classes = 22        # 21 (including background) + ambiguous
+num_classes = None
 
 def main():
-    global alpha, args
+    global alpha, args, num_classes
     args = parser.parse_args()
     alpha = args.alpha
+    num_classes = 22 if args.dataset == 'VOC' else 183  # 21 or 182 (including background) + ambiguous
 
     # Set up
     set_up()
@@ -140,6 +142,7 @@ def main():
 def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
     args.gpu = gpu
+    ambiguous_label = num_classes - 1
 
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
@@ -197,8 +200,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # define loss function (criterion) and optimizer
     class_weights = torch.ones(num_classes)
-    class_weights[0] = 1        # Background
-    class_weights[21] = 0       # Ambiguous
+    class_weights[0] = 1                     # Background
+    class_weights[ambiguous_label] = 0       # Ambiguous
     criterion = nn.CrossEntropyLoss(class_weights).cuda(args.gpu)
 
     if args.non_lazy:
@@ -231,9 +234,9 @@ def main_worker(gpu, ngpus_per_node, args):
     cudnn.benchmark = True
 
     # Data loading code
-    if args.dataset == 'VOC':
-        datafolder_VOC = '/data/Datasets/PASCAL_VOC'
-        datafolder_SBD = '/data/Datasets/SBD'
+    datafolder_VOC = '/data/Datasets/PASCAL_VOC'
+    datafolder_SBD = '/data/Datasets/SBD'
+    datafolder_COCO = '/data/Datasets/COCO'
 
     train_transform = ComposeJoint(
         [
@@ -242,7 +245,7 @@ def main_worker(gpu, ngpus_per_node, args):
             [transforms.ToTensor(), lambda x:x],
             [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)), lambda x:x],
             [lambda x:x, transforms.Lambda(lambda x: torch.from_numpy(np.asarray(x)).long())],
-            [lambda x:x, remap_ambiguous()]
+            [lambda x:x, remap_ambiguous(ambiguous_label)]
         ])
     valid_transform = ComposeJoint(
         [
@@ -250,15 +253,21 @@ def main_worker(gpu, ngpus_per_node, args):
             [transforms.ToTensor(), lambda x:x],
             [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)), lambda x:x],
             [lambda x:x, transforms.Lambda(lambda x: torch.from_numpy(np.asarray(x)).long())],
-            [lambda x:x, remap_ambiguous()]
+            [lambda x:x, remap_ambiguous(ambiguous_label)]
         ])
 
     train_dataset_VOC = datasets.VOCSegmentation(
         datafolder_VOC, '2012', 'train', download=False, transforms=train_transform)
     train_dataset_SBD = datasets.SBDataset(
         datafolder_SBD, 'train_noval', 'segmentation', download=False, transforms=train_transform)
-    val_dataset = datasets.VOCSegmentation(
+    train_dataset_Coco = CocoStuff164k(
+        root=datafolder_COCO, split='train2017', ignore_label=255, mean_bgr=(104.008, 116.669, 122.675),
+        augment=True, base_size=None, crop_size=321, scales=[0.5, 0.75, 1.0, 1.25, 1.5], flip=True)
+    val_dataset_VOC = datasets.VOCSegmentation(
         datafolder_VOC, '2012', 'val', download=False, transforms=valid_transform)
+    val_dataset_COCO = CocoStuff164k(
+        root=datafolder_COCO, split='val2017', ignore_label=255, mean_bgr=(104.008, 116.669, 122.675),
+        augment=False)
 
     train_sampler = None
 
@@ -270,6 +279,11 @@ def main_worker(gpu, ngpus_per_node, args):
         train_dataset_SBD, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
+    train_loader_COCO = torch.utils.data.DataLoader(
+        train_dataset_Coco, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, sampler=train_sampler)
+
+    val_dataset = val_dataset_VOC if args.dataset == 'VOC' else val_dataset_COCO
     val_loader = torch.utils.data.DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.workers, pin_memory=True)
@@ -285,8 +299,11 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_alpha(epoch, args)
 
         # train for one epoch
-        train(train_loader_VOC, model, criterion, optimizer, epoch, args)
-        train(train_loader_SBD, model, criterion, optimizer, epoch, args)
+        if args.dataset == 'VOC':
+            train(train_loader_VOC, model, criterion, optimizer, epoch, args)
+            train(train_loader_SBD, model, criterion, optimizer, epoch, args)
+        elif args.dataset == 'COCO':
+            train(train_loader_COCO, model, criterion, optimizer, epoch, args)
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, criterion, args)

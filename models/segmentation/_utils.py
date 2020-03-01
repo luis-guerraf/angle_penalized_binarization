@@ -106,8 +106,11 @@ class RandomCropJoint(transforms.RandomCrop):
 
 
 class remap_ambiguous(object):
+    def __init__(self, ambiguous_label):
+        self.ambiguous_label = ambiguous_label
+
     def __call__(self, img):
-        img[img == 255] = 21
+        img[img == 255] = self.ambigous_label    # 21 for VOC, 182 for COCO
         return img
 
 
