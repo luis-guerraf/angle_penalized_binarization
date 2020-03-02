@@ -249,7 +249,7 @@ def main_worker(gpu, ngpus_per_node, args):
         ])
     valid_transform = ComposeJoint(
         [
-            RandomCropJoint(size=224, pad_if_needed=True),
+            # RandomCropJoint(size=224, pad_if_needed=True),
             [transforms.ToTensor(), lambda x:x],
             [transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225)), lambda x:x],
             [lambda x:x, transforms.Lambda(lambda x: torch.from_numpy(np.asarray(x)).long())],
@@ -285,7 +285,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     val_dataset = val_dataset_VOC if args.dataset == 'VOC' else val_dataset_COCO
     val_loader = torch.utils.data.DataLoader(
-        val_dataset, batch_size=args.batch_size, shuffle=False,
+        val_dataset, batch_size=1, shuffle=False,
         num_workers=args.workers, pin_memory=True)
 
     if args.evaluate:
