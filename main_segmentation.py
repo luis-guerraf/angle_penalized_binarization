@@ -261,12 +261,12 @@ def main_worker(gpu, ngpus_per_node, args):
     train_dataset_SBD = datasets.SBDataset(
         datafolder_SBD, 'train_noval', 'segmentation', download=False, transforms=train_transform)
     train_dataset_Coco = CocoStuff164k(
-        root=datafolder_COCO, split='train2017', ignore_label=255, mean_bgr=(104.008, 116.669, 122.675),
+        root=datafolder_COCO, split='train2017', ignore_label=ambiguous_label, mean_bgr=(104.008, 116.669, 122.675),
         augment=True, base_size=None, crop_size=321, scales=[0.5, 0.75, 1.0, 1.25, 1.5], flip=True)
     val_dataset_VOC = datasets.VOCSegmentation(
         datafolder_VOC, '2012', 'val', download=False, transforms=valid_transform)
     val_dataset_COCO = CocoStuff164k(
-        root=datafolder_COCO, split='val2017', ignore_label=255, mean_bgr=(104.008, 116.669, 122.675),
+        root=datafolder_COCO, split='val2017', ignore_label=ambiguous_label, mean_bgr=(104.008, 116.669, 122.675),
         augment=False)
 
     train_sampler = None

@@ -110,7 +110,7 @@ class remap_ambiguous(object):
         self.ambiguous_label = ambiguous_label
 
     def __call__(self, img):
-        img[img == 255] = self.ambigous_label    # 21 for VOC, 182 for COCO
+        img[img == 255] = self.ambiguous_label    # 21 for VOC, 182 for COCO
         return img
 
 

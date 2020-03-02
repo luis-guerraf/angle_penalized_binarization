@@ -7,10 +7,10 @@
 
 import random
 
-import cv2
+# import cv2
+import PIL
 import numpy as np
 import torch
-from PIL import Image
 from torch.utils import data
 
 
@@ -43,7 +43,7 @@ class _BaseDataset(data.Dataset):
         self.files = []
         self._set_files()
 
-        cv2.setNumThreads(0)
+        # cv2.setNumThreads(0)
 
     def _set_files(self):
         """
@@ -67,8 +67,9 @@ class _BaseDataset(data.Dataset):
                 h, w = (int(self.base_size * h / w), self.base_size)
         scale_factor = random.choice(self.scales)
         h, w = (int(h * scale_factor), int(w * scale_factor))
-        image = cv2.resize(image, (w, h), interpolation=cv2.INTER_LINEAR)
-        label = Image.fromarray(label).resize((w, h), resample=Image.NEAREST)
+        # image = cv2.resize(image, (w, h), interpolation=cv2.INTER_LINEAR)
+        image = np.array(PIL.Image.fromarray(np.uint8(image)).resize((w, h), resample=PIL.Image.BILINEAR)).astype(np.float32)
+        label = PIL.Image.fromarray(label).resize((w, h), resample=PIL.Image.NEAREST)
         label = np.asarray(label, dtype=np.int64)
 
         # Padding to fit for crop_size
@@ -80,11 +81,17 @@ class _BaseDataset(data.Dataset):
             "bottom": pad_h,
             "left": 0,
             "right": pad_w,
-            "borderType": cv2.BORDER_CONSTANT,
+            # "borderType": cv2.BORDER_CONSTANT,
         }
         if pad_h > 0 or pad_w > 0:
-            image = cv2.copyMakeBorder(image, value=self.mean_bgr, **pad_kwargs)
-            label = cv2.copyMakeBorder(label, value=self.ignore_label, **pad_kwargs)
+            # image2 = cv2.copyMakeBorder(image, value=self.mean_bgr, **pad_kwargs)
+            # label2 = cv2.copyMakeBorder(label, value=self.ignore_label, **pad_kwargs)
+            new_im = PIL.Image.new("RGB", (h+pad_h, w+pad_w), color=tuple(self.mean_bgr.astype(np.int)))
+            new_im.paste(PIL.Image.fromarray(np.uint8(image)))
+            image = np.array(new_im).astype(np.float32)
+            new_lb = PIL.Image.new("I", (h+pad_h, w+pad_w), color=self.ignore_label)
+            new_lb.paste(PIL.Image.fromarray(np.uint8(label)))
+            label = np.array(new_lb)
 
         # Cropping
         h, w = label.shape
@@ -110,6 +117,10 @@ class _BaseDataset(data.Dataset):
         image -= self.mean_bgr
         # HWC -> CHW
         image = image.transpose(2, 0, 1)
+
+        # Remap ambiguous
+        label[label == 255] = self.ignore_label
+
         return image.astype(np.float32), label.astype(np.int64)
 
     def __len__(self):

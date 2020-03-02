@@ -10,11 +10,11 @@ from __future__ import absolute_import, print_function
 import os.path as osp
 from glob import glob
 
-import cv2
+# import cv2
+import PIL
 import numpy as np
 import scipy.io as sio
 import torch
-from PIL import Image
 from torch.utils import data
 
 from .base import _BaseDataset
@@ -43,14 +43,14 @@ class CocoStuff10k(_BaseDataset):
         image_path = osp.join(self.root, "images", image_id + ".jpg")
         label_path = osp.join(self.root, "annotations", image_id + ".mat")
         # Load an image and label
-        image = cv2.imread(image_path, cv2.IMREAD_COLOR).astype(np.float32)
+        # image = cv2.imread(image_path, cv2.IMREAD_COLOR).astype(np.float32)
         label = sio.loadmat(label_path)["S"]
         label -= 1  # unlabeled (0 -> -1)
         label[label == -1] = 255
         # Warping: this is just for reproducing the official scores on GitHub
         if self.warp_image:
-            image = cv2.resize(image, (513, 513), interpolation=cv2.INTER_LINEAR)
-            label = Image.fromarray(label).resize((513, 513), resample=Image.NEAREST)
+            # image = cv2.resize(image, (513, 513), interpolation=cv2.INTER_LINEAR)
+            label = PIL.Image.fromarray(label).resize((513, 513), resample=PIL.Image.NEAREST)
             label = np.asarray(label)
         return image_id, image, label
 
@@ -79,8 +79,16 @@ class CocoStuff164k(_BaseDataset):
         image_path = osp.join(self.root, "images", self.split, image_id + ".jpg")
         label_path = osp.join(self.root, "annotations", self.split, image_id + ".png")
         # Load an image and label
-        image = cv2.imread(image_path, cv2.IMREAD_COLOR).astype(np.float32)
-        label = cv2.imread(label_path, cv2.IMREAD_GRAYSCALE)
+        # image = cv2.imread(image_path, cv2.IMREAD_COLOR).astype(np.float32)
+        image = PIL.Image.open(image_path)
+        try:
+            b, g, r = image.split()
+        except:
+            b, g, r = image.convert("RGB").split()
+
+        image = np.array(PIL.Image.merge("RGB", (r, g, b))).astype(np.float32)
+        # label = cv2.imread(label_path, cv2.IMREAD_GRAYSCALE)
+        label = np.array(PIL.Image.open(label_path))
         return image_id, image, label
 
 
