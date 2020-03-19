@@ -46,7 +46,7 @@ parser.add_argument('-b', '--batch-size', default=16, type=int,
                     help='mini-batch size (default: 256), this is the total '
                          'batch size of all GPUs on the current node when '
                          'using Data Parallel or Distributed Data Parallel')
-parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float,
+parser.add_argument('--lr', '--learning-rate', default=1e-2, type=float,
                     metavar='LR', help='initial learning rate', dest='lr')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
@@ -367,7 +367,8 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
             loss = CE_loss
 
         # measure accuracy and record loss
-        acc = compute_miou(output, target)
+        # acc = compute_miou(output, target)
+        acc, _, _, _, _, _ = _computeMetrics(compute_confusion(output, target))
         CE_losses.update(CE_loss.item(), input.size(0))
         AP_losses.update(AP_loss.data.item(), input.size(0))
         MIOU.update(acc, input.size(0))
@@ -426,7 +427,8 @@ def validate(val_loader, model, criterion, args):
             CE_loss = criterion(output, target)
 
             # measure accuracy and record loss
-            acc = compute_miou(output, target)
+            # acc = compute_miou(output, target)
+            acc, _, _, _, _, _ = _computeMetrics(compute_confusion(output, target))
             CE_losses.update(CE_loss.item(), input.size(0))
             AP_losses.update(AP_loss.data.item(), input.size(0))
             MIOU.update(acc, input.size(0))
@@ -505,6 +507,67 @@ def compute_miou(output, target):
 
         return miou
 
+
+def compute_confusion(output, target):
+    output = output.max(dim=1).indices  # Batch x Classes x H*W => B x H*W
+    target = target.cpu().detach().numpy()
+    output = output.cpu().detach().numpy()
+    confusion = np.zeros((num_classes, num_classes))
+    cat_ids = range(0, num_classes)
+    valid = np.reshape(np.in1d(target, cat_ids), target.shape)
+    valid_gt = target[valid].astype(int)
+    valid_pred = output[valid].astype(int)
+
+    # Accumulate confusion
+    n = confusion.shape[0] + 1  # Arbitrary number > labelCount
+    map_for_count = valid_gt * n + valid_pred
+    vals, cnts = np.unique(map_for_count, return_counts=True)
+    for v, c in zip(vals, cnts):
+        g = v // n
+        d = v % n
+        confusion[g, d] += c
+
+    return confusion
+
+
+def _computeMetrics(confusion):
+    '''
+    Compute evaluation metrics given a confusion matrix.
+    :param confusion: any confusion matrix
+    :return: tuple (miou, fwiou, macc, pacc, ious, maccs)
+    '''
+
+    # Init
+    labelCount = confusion.shape[0]
+    ious = np.zeros((labelCount))
+    maccs = np.zeros((labelCount))
+    ious[:] = np.NAN
+    maccs[:] = np.NAN
+
+    # Get true positives, positive predictions and positive ground-truth
+    total = confusion.sum()
+    if total <= 0:
+        raise Exception('Error: Confusion matrix is empty!')
+    tp = np.diagonal(confusion)
+    posPred = confusion.sum(axis=0)
+    posGt = confusion.sum(axis=1)
+
+    # Check which classes have elements
+    valid = posGt > 0
+    iousValid = np.logical_and(valid, posGt + posPred - tp > 0)
+
+    # Compute per-class results and frequencies
+    ious[iousValid] = np.divide(tp[iousValid], posGt[iousValid] + posPred[iousValid] - tp[iousValid])
+    maccs[valid] = np.divide(tp[valid], posGt[valid])
+    freqs = np.divide(posGt, total)
+
+    # Compute evaluation metrics
+    miou = np.mean(ious[iousValid])
+    fwiou = np.sum(np.multiply(ious[iousValid], freqs[iousValid]))
+    macc = np.mean(maccs[valid])
+    pacc = tp.sum() / total
+
+    return miou, fwiou, macc, pacc, ious, maccs
 
 # Create list with conv2d
 # NOTE: Make sure layers are declared in order in the model
