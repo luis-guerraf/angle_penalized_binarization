@@ -83,8 +83,6 @@ parser.add_argument('--bitScale', default=32, type=int,
                     help='bitwidth of activations')
 parser.add_argument('--non-lazy', dest='non_lazy', action='store_true',
                     help='Lazy (STE) or non-lazy projection')
-parser.add_argument('--freeze-W', dest='freeze_W', action='store_true',
-                    help='Freeze weights to fine-tune batch-norm parameters')
 parser.add_argument('--learnable-scalings', dest='learnable_scalings', action='store_true',
                     help='Learnable scalings')
 parser.add_argument('--mode', default=None, choices=['layerwise', 'channelwise', 'kernelwise'],
@@ -195,9 +193,6 @@ def main_worker(gpu, ngpus_per_node, args):
         else:
             model = torch.nn.DataParallel(model).cuda()
 
-    if args.freeze_W:
-        list(map(freeze_weights, layers_list(model.module)))
-
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
@@ -282,6 +277,11 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
         adjust_alpha(epoch, args)
 
+        if epoch >= 30:
+            # Freeze conv layers
+            list(map(freeze_weights, layers_list(model.module)))
+            models.quantized_ops.bitW = args.bitW
+
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch, args)
 
@@ -316,10 +316,6 @@ def train(train_loader, model, criterion, optimizer, epoch, args):
 
     # switch to train mode
     model.train()
-
-    # Train using final weights
-    if args.freeze_W:
-        models.quantized_ops.bitW = args.bitW
 
     end = time.time()
     for i, (input, target) in enumerate(train_loader):
@@ -589,9 +585,7 @@ def freeze_weights(layer):
 
 def set_up():
     # assert not (args.learnable_scalings and args.alpha), "Error: Learning scalings on and alpha != 0"
-    assert not (args.alpha and args.freeze_W), "Freeze_W and alpha != 0"
     assert not (args.learnable_scalings and args.non_lazy), "Learnable scalings and non-lazy"
-    assert not (args.learnable_scalings and args.freeze_W), "Learnable scalings and freeze-W"
 
     if args.learnable_scalings:
         print("Warning: Learnable scalings uses Adam, use approapiate lr and wd")

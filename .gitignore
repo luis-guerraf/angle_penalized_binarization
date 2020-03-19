@@ -127,5 +127,4 @@ dmypy.json
 *.svg
 *.pdf
 *.pt
-*.txt
 *.pth.tar
