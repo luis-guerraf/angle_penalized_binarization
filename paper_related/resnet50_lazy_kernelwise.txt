@@ -1,0 +1,73 @@
+Epoch: [0]	Time 0.368	Loss 2.4793 + -inf	Acc@1 45.68	Acc@5 70.24	alpha 0.00	lr 1.0e-04
+Test:		Time 0.126	Loss 1.9829 + -inf	Acc@1 53.52	Acc@5 78.76	alpha 0.00
+Best accuracy: 53.524
+Epoch: [1]	Time 0.366	Loss 2.1669 + -inf	Acc@1 51.24	Acc@5 75.18	alpha 0.00	lr 1.0e-04
+Test:		Time 0.125	Loss 1.9385 + -inf	Acc@1 54.47	Acc@5 79.54	alpha 0.00
+Best accuracy: 54.474
+Epoch: [2]	Time 0.366	Loss 2.0538 + -inf	Acc@1 53.45	Acc@5 76.87	alpha 0.00	lr 1.0e-04
+Test:		Time 0.125	Loss 2.0502 + -inf	Acc@1 53.05	Acc@5 77.84	alpha 0.00
+Epoch: [3]	Time 0.366	Loss 1.9724 + -inf	Acc@1 55.08	Acc@5 78.10	alpha 0.00	lr 1.0e-04
+Test:		Time 0.125	Loss 1.6396 + -inf	Acc@1 60.92	Acc@5 83.95	alpha 0.00
+Best accuracy: 60.918
+Epoch: [4]	Time 0.366	Loss 1.9095 + -inf	Acc@1 56.36	Acc@5 79.00	alpha 0.00	lr 1.0e-04
+Test:		Time 0.125	Loss 1.6746 + -inf	Acc@1 60.11	Acc@5 83.49	alpha 0.00
+Epoch: [5]	Time 0.368	Loss 1.8587 + -inf	Acc@1 57.35	Acc@5 79.75	alpha 0.00	lr 1.0e-04
+Test:		Time 0.126	Loss 1.6147 + -inf	Acc@1 61.60	Acc@5 84.31	alpha 0.00
+Best accuracy: 61.598
+Epoch: [6]	Time 0.369	Loss 1.8161 + -inf	Acc@1 58.21	Acc@5 80.38	alpha 0.00	lr 1.0e-04
+Test:		Time 0.126	Loss 2.0273 + -inf	Acc@1 53.95	Acc@5 78.13	alpha 0.00
+Epoch: [7]	Time 0.371	Loss 1.7794 + -inf	Acc@1 58.92	Acc@5 80.87	alpha 0.00	lr 1.0e-04
+Test:		Time 0.126	Loss 1.6366 + -inf	Acc@1 60.74	Acc@5 83.73	alpha 0.00
+Epoch: [8]	Time 0.369	Loss 1.7489 + -inf	Acc@1 59.53	Acc@5 81.30	alpha 0.00	lr 1.0e-04
+Test:		Time 0.127	Loss 1.5156 + -inf	Acc@1 63.46	Acc@5 85.68	alpha 0.00
+Best accuracy: 63.460
+Epoch: [9]	Time 0.371	Loss 1.7184 + -inf	Acc@1 60.15	Acc@5 81.74	alpha 0.00	lr 1.0e-04
+Test:		Time 0.129	Loss 1.6763 + -inf	Acc@1 60.29	Acc@5 83.12	alpha 0.00
+Epoch: [10]	Time 0.370	Loss 1.6930 + -inf	Acc@1 60.68	Acc@5 82.08	alpha 0.00	lr 1.0e-04
+Test:		Time 0.126	Loss 1.5253 + -inf	Acc@1 63.27	Acc@5 85.60	alpha 0.00
+Epoch: [11]	Time 0.370	Loss 1.6707 + -inf	Acc@1 61.11	Acc@5 82.39	alpha 0.00	lr 1.0e-04
+Test:		Time 0.127	Loss 1.6659 + -inf	Acc@1 60.29	Acc@5 83.48	alpha 0.00
+Epoch: [12]	Time 0.370	Loss 1.6482 + -inf	Acc@1 61.59	Acc@5 82.71	alpha 0.00	lr 1.0e-04
+Test:		Time 0.127	Loss 1.5038 + -inf	Acc@1 63.86	Acc@5 85.82	alpha 0.00
+Best accuracy: 63.864
+Epoch: [13]	Time 0.369	Loss 1.6301 + -inf	Acc@1 61.99	Acc@5 82.97	alpha 0.00	lr 1.0e-04
+Test:		Time 0.126	Loss 1.5017 + -inf	Acc@1 63.87	Acc@5 85.76	alpha 0.00
+Best accuracy: 63.866
+Epoch: [14]	Time 0.370	Loss 1.6127 + -inf	Acc@1 62.34	Acc@5 83.19	alpha 0.00	lr 1.0e-04
+Test:		Time 0.126	Loss 1.5012 + -inf	Acc@1 63.80	Acc@5 85.90	alpha 0.00
+Epoch: [15]	Time 0.368	Loss 1.3859 + -inf	Acc@1 67.21	Acc@5 86.21	alpha 0.00	lr 1.0e-05
+Test:		Time 0.126	Loss 1.2378 + -inf	Acc@1 69.99	Acc@5 89.38	alpha 0.00
+Best accuracy: 69.990
+Epoch: [16]	Time 0.369	Loss 1.3357 + -inf	Acc@1 68.32	Acc@5 86.88	alpha 0.00	lr 1.0e-05
+Test:		Time 0.127	Loss 1.2668 + -inf	Acc@1 69.22	Acc@5 88.89	alpha 0.00
+Epoch: [17]	Time 0.369	Loss 1.3147 + -inf	Acc@1 68.70	Acc@5 87.13	alpha 0.00	lr 1.0e-05
+Test:		Time 0.127	Loss 1.2931 + -inf	Acc@1 68.83	Acc@5 88.69	alpha 0.00
+Epoch: [18]	Time 0.370	Loss 1.3017 + -inf	Acc@1 69.02	Acc@5 87.26	alpha 0.00	lr 1.0e-05
+Test:		Time 0.126	Loss 1.2255 + -inf	Acc@1 69.96	Acc@5 89.59	alpha 0.00
+Epoch: [19]	Time 0.370	Loss 1.2937 + -inf	Acc@1 69.19	Acc@5 87.39	alpha 0.00	lr 1.0e-05
+Test:		Time 0.128	Loss 1.2423 + -inf	Acc@1 69.87	Acc@5 89.33	alpha 0.00
+Epoch: [20]	Time 0.371	Loss 1.2840 + -inf	Acc@1 69.36	Acc@5 87.50	alpha 0.00	lr 1.0e-05
+Test:		Time 0.127	Loss 1.2187 + -inf	Acc@1 70.33	Acc@5 89.66	alpha 0.00
+Best accuracy: 70.334
+Epoch: [21]	Time 0.371	Loss 1.2798 + -inf	Acc@1 69.46	Acc@5 87.56	alpha 0.00	lr 1.0e-05
+Test:		Time 0.127	Loss 1.2846 + -inf	Acc@1 68.95	Acc@5 88.90	alpha 0.00
+Epoch: [22]	Time 0.370	Loss 1.2739 + -inf	Acc@1 69.53	Acc@5 87.64	alpha 0.00	lr 1.0e-05
+Test:		Time 0.127	Loss 1.2431 + -inf	Acc@1 69.68	Acc@5 89.34	alpha 0.00
+Epoch: [23]	Time 0.370	Loss 1.2690 + -inf	Acc@1 69.64	Acc@5 87.68	alpha 0.00	lr 1.0e-05
+Test:		Time 0.126	Loss 1.2293 + -inf	Acc@1 70.05	Acc@5 89.55	alpha 0.00
+Epoch: [24]	Time 0.370	Loss 1.2658 + -inf	Acc@1 69.72	Acc@5 87.74	alpha 0.00	lr 1.0e-05
+Test:		Time 0.125	Loss 1.1926 + -inf	Acc@1 70.82	Acc@5 89.85	alpha 0.00
+Best accuracy: 70.822
+Epoch: [25]	Time 0.369	Loss 1.2616 + -inf	Acc@1 69.82	Acc@5 87.76	alpha 0.00	lr 1.0e-05
+Test:		Time 0.126	Loss 1.2695 + -inf	Acc@1 69.22	Acc@5 89.01	alpha 0.00
+Epoch: [26]	Time 0.368	Loss 1.2570 + -inf	Acc@1 69.91	Acc@5 87.86	alpha 0.00	lr 1.0e-05
+Test:		Time 0.126	Loss 1.2256 + -inf	Acc@1 70.35	Acc@5 89.58	alpha 0.00
+Epoch: [27]	Time 0.368	Loss 1.2552 + -inf	Acc@1 69.98	Acc@5 87.89	alpha 0.00	lr 1.0e-05
+Test:		Time 0.127	Loss 1.3849 + -inf	Acc@1 66.94	Acc@5 87.35	alpha 0.00
+Epoch: [28]	Time 0.370	Loss 1.2501 + -inf	Acc@1 70.10	Acc@5 87.92	alpha 0.00	lr 1.0e-05
+Test:		Time 0.127	Loss 1.2374 + -inf	Acc@1 70.13	Acc@5 89.56	alpha 0.00
+Epoch: [29]	Time 0.371	Loss 1.2474 + -inf	Acc@1 70.14	Acc@5 87.94	alpha 0.00	lr 1.0e-05
+Test:		Time 0.128	Loss 1.3261 + -inf	Acc@1 68.06	Acc@5 88.31	alpha 0.00
+Epoch: [30]	Time 0.369	Loss 1.1895 + -inf	Acc@1 71.41	Acc@5 88.72	alpha 0.00	lr 1.0e-06
+Test:		Time 0.127	Loss 1.1477 + -inf	Acc@1 71.89	Acc@5 90.57	alpha 0.00
+Best accuracy: 71.886
