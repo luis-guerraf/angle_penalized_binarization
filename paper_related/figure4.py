@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 plt.style.use('seaborn-whitegrid')
 
-f = open("multistep_beta_SGD.txt", "r")
+f = open("nonlazy_kernelwise_exponential_beta.txt", "r")
 acc = []
 angle = []
 
@@ -31,10 +31,10 @@ ax.tick_params(axis='y', labelcolor=color)
 ax2 = ax.twinx()  # instantiate a second axes that shares the same x-axis
 
 color = 'tab:red'
-ax2.set_ylabel('Cosine distance', fontsize=14, color=color)  # we already handled the x-label with ax1
+ax2.set_ylabel('1 - Cosine distance', fontsize=14, color=color)  # we already handled the x-label with ax1
 ax2.plot(angle, color=color)
 ax2.tick_params(axis='y', labelcolor=color)
 
 fig.tight_layout()  # otherwise the right y-label is slightly clipped
-plt.savefig('angle_vs_validation.pdf')
+plt.savefig('angle_vs_validation_nonlazy.pdf')
 plt.show()
